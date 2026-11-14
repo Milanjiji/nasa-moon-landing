@@ -1,5 +1,9 @@
 import * as THREE from 'three';
 import createLaunchSite from './launchSite.js';
+import createCharacterPopup from '../ui/characterPopup.js';
+import { getPhase, setPhase } from '../game/state.js';
+import { createMoonTextures } from '../world/moonTexture.js';
+import createCockpitScene from './cockpitScene.js';
 
 const STAR_COUNT = 3500;
 const MOON_ROTATION_SPEED = 0.025;
@@ -113,6 +117,9 @@ export default class EarthScene {
 
     this.scene = new THREE.Scene();
 
+    this.currentLocation = 'start';
+    this.characterPopup = null;
+
     // Status tracking for each setup step.
     this.setupStatus = {
       rendererCamera: false,
@@ -125,6 +132,11 @@ export default class EarthScene {
       launchSite: false,
       trees: false,
       drag: false,
+      prepare: false,
+      popup: false,
+      gear: false,
+      board: false,
+      cockpit: false,
     };
 
     // ---- Renderer and camera (essential) ----
@@ -260,23 +272,17 @@ export default class EarthScene {
     // ---- Dev keys: R = launch pad, E = back to start ----
     try {
       const padKeyHandler = (e) => {
-        // Ignore when settings panel is open.
+        // Ignore when settings panel or character popup is open, or during cockpit phase.
         const panel = document.getElementById('settings-panel');
         if (panel && panel.classList.contains('open')) return;
+        if (getPhase() === 'cockpit' || (this.characterPopup && this.characterPopup.isOpen())) return;
         if (!this.launchSite) return;
 
         if (e.key === 'r' || e.key === 'R') {
           const vp = this.launchSite.viewPoint;
           this.camera.position.copy(vp.position);
-          this.camera.lookAt(vp.lookAt);
-          const dir = new THREE.Vector3()
-            .subVectors(vp.lookAt, vp.position)
-            .normalize();
-          this.yaw = Math.atan2(dir.x, -dir.z);
-          this.pitch = -Math.asin(dir.y);
-          this.camera.rotation.order = 'YXZ';
-          this.camera.rotation.y = this.yaw;
-          this.camera.rotation.x = this.pitch;
+          this.lookAtPoint(vp.lookAt);
+          this.setLocation('launchSite');
         } else if (e.key === 'e' || e.key === 'E') {
           this.camera.position.copy(this.originalPosition);
           this.yaw = this.originalYaw;
@@ -284,12 +290,92 @@ export default class EarthScene {
           this.camera.rotation.order = 'YXZ';
           this.camera.rotation.y = this.yaw;
           this.camera.rotation.x = this.pitch;
+          this.setLocation('start');
         }
       };
       window.addEventListener('keydown', padKeyHandler);
       console.log('Dev keys: R = launch pad, E = back to start');
     } catch (error) {
       console.error('EarthScene part failed: devKeys', error);
+    }
+
+    // ---- Prepare button ----
+    try {
+      this.initPrepareButton();
+      this.setupStatus.prepare = true;
+    } catch (error) {
+      console.error('EarthScene part failed: prepareButton', error);
+    }
+
+    // ---- Character popup ----
+    try {
+      this.characterPopup = createCharacterPopup();
+      this.setupStatus.popup = true;
+      if (this.characterPopup) {
+        if (this.characterPopup.gearPanelOk) {
+          this.setupStatus.gear = true;
+        }
+        if (this.characterPopup.boardButtonOk) {
+          this.setupStatus.board = true;
+        }
+        this.characterPopup.onClose(() => {
+          this.onPopupClosed();
+        });
+        this.characterPopup.onBackToLaunchSite(() => {
+          this.onBackToLaunchSite();
+        });
+      }
+    } catch (error) {
+      console.error('EarthScene part failed: characterPopup', error);
+    }
+
+    // ---- Cockpit scene ----
+    try {
+      const cockpitContainer = document.getElementById('cockpit-view');
+      if (cockpitContainer) {
+        this.cockpitScene = createCockpitScene(cockpitContainer);
+        if (this.cockpitScene) {
+          this.setupStatus.cockpit = true;
+          if (typeof window !== 'undefined') {
+            window.cockpitScene = this.cockpitScene;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('EarthScene part failed: cockpit', error);
+    }
+
+    // Dev button in cockpit: return to launch site
+    try {
+      const devBackBtn = document.getElementById('cockpit-dev-back-btn');
+      if (devBackBtn) {
+        devBackBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          /* TEMPORARY: dev button to return to launch site */
+          if (this.cockpitScene) {
+            this.cockpitScene.stop();
+          }
+          const cockpitView = document.getElementById('cockpit-view');
+          if (cockpitView) cockpitView.classList.add('hidden');
+
+          const appCanvas = document.querySelector('#app canvas');
+          if (appCanvas) appCanvas.style.display = 'block';
+
+          if (typeof window !== 'undefined' && typeof window.resumeEarthScene === 'function') {
+            window.resumeEarthScene();
+          }
+          this.currentLocation = 'launchSite';
+          setPhase('launchSite');
+          if (this.launchSite && this.camera) {
+            const vp = this.launchSite.viewPoint;
+            this.camera.position.copy(vp.position);
+            this.lookAtPoint(vp.lookAt);
+          }
+          this.updatePrepareButtonVisibility();
+        });
+      }
+    } catch (error) {
+      console.error('EarthScene part failed: cockpitDevBtn', error);
     }
 
     // ---- Status summary ----
@@ -308,8 +394,14 @@ export default class EarthScene {
       const padCenterStatus = launchPadCenter
         ? `(${launchPadCenter.x.toFixed(1)},${launchPadCenter.z.toFixed(1)})`
         : 'n/a';
+      const prepareStatus = this.setupStatus.prepare ? 'ok' : 'FAILED';
+      const popupStatus = this.setupStatus.popup ? 'ok' : 'FAILED';
+      const gearStatus = this.setupStatus.gear ? 'ok' : 'FAILED';
+      const boardStatus = this.setupStatus.board ? 'ok' : 'FAILED';
+      const cockpitStatus = this.setupStatus.cockpit ? 'ok' : 'FAILED';
+      const currentPhase = getPhase();
 
-      const statusMessage = `EarthScene ready: sky=${skyStatus} moon=${moonStatus} stars=${starsStatus} ground=${groundStatus} ridges=${ridgesStatus} launchSite=${launchSiteStatus} trees=${treesStatus} (${treeCount} trees) drag=${dragStatus} padCenter=${padCenterStatus}`;
+      const statusMessage = `EarthScene ready: sky=${skyStatus} moon=${moonStatus} stars=${starsStatus} ground=${groundStatus} ridges=${ridgesStatus} launchSite=${launchSiteStatus} trees=${treesStatus} (${treeCount} trees) drag=${dragStatus} padCenter=${padCenterStatus} prepare=${prepareStatus} popup=${popupStatus} gear=${gearStatus} board=${boardStatus} cockpit=${cockpitStatus} phase=${currentPhase}`;
       console.log(statusMessage);
     } catch (error) {
       console.error('EarthScene part failed: status', error);
@@ -401,88 +493,6 @@ export default class EarthScene {
   }
 
   // ---------------------------------------------------------------------------
-  // Moon texture (procedural, 2048x1024)
-  // ---------------------------------------------------------------------------
-  createMoonTexture() {
-    const w = 2048;
-    const h = 1024;
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-
-    ctx.fillStyle = '#8a8a90';
-    ctx.fillRect(0, 0, w, h);
-
-    const img = ctx.getImageData(0, 0, w, h);
-    const data = img.data;
-    for (let i = 0; i < data.length; i += 4) {
-      const g = 138 + Math.random() * 24 - 12;
-      data[i] = g;
-      data[i + 1] = g;
-      data[i + 2] = g + Math.random() * 6 - 3;
-      data[i + 3] = 255;
-    }
-    ctx.putImageData(img, 0, 0);
-
-    for (let i = 0; i < 8; i++) {
-      const x = Math.random() * w;
-      const y = Math.random() * h;
-      const r = 90 + Math.random() * 330;
-      const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
-      grad.addColorStop(0, 'rgba(60, 60, 68, 0.9)');
-      grad.addColorStop(0.45, 'rgba(76, 76, 82, 0.55)');
-      grad.addColorStop(1, 'rgba(76, 76, 82, 0)');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    for (let i = 0; i < 700; i++) {
-      const x = Math.random() * w;
-      const y = Math.random() * h;
-      const r = 1 + Math.random() * 22;
-
-      const gradIn = ctx.createRadialGradient(x, y, r * 0.3, x, y, r);
-      gradIn.addColorStop(0, 'rgba(40, 40, 46, 0.85)');
-      gradIn.addColorStop(1, 'rgba(120, 120, 128, 0)');
-      ctx.fillStyle = gradIn;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.strokeStyle = 'rgba(160, 160, 170, 0.55)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-
-    ctx.strokeStyle = 'rgba(200, 200, 210, 0.5)';
-    ctx.lineWidth = 2;
-    for (let i = 0; i < 14; i++) {
-      const cx = Math.random() * w;
-      const cy = Math.random() * h;
-      const numRays = 4 + Math.floor(Math.random() * 5);
-      const cr = 12 + Math.random() * 20;
-      for (let j = 0; j < numRays; j++) {
-        const ang = (Math.PI * 2 * j) / numRays + Math.random() * 0.4;
-        const len = 60 + Math.random() * 160;
-        ctx.beginPath();
-        ctx.moveTo(cx + Math.cos(ang) * cr, cy + Math.sin(ang) * cr);
-        ctx.lineTo(
-          cx + Math.cos(ang) * (cr + len),
-          cy + Math.sin(ang) * (cr + len)
-        );
-        ctx.stroke();
-      }
-    }
-
-    return new THREE.CanvasTexture(canvas);
-  }
-
-  // ---------------------------------------------------------------------------
   // Stars (above horizon only, varied sizes, twinkle, no fog, no sizeAttenuation)
   // ---------------------------------------------------------------------------
   initStars() {
@@ -566,16 +576,16 @@ export default class EarthScene {
   // Moon
   // ---------------------------------------------------------------------------
   initMoon() {
-    const texture = this.createMoonTexture();
+    const { map, bumpMap } = createMoonTextures();
     const geometry = new THREE.SphereGeometry(2.2, 64, 64);
     geometry.name = 'moon';
     checkFinite(geometry, 'moon');
     const material = new THREE.MeshStandardMaterial({
-      map: texture,
-      emissiveMap: texture,
+      map,
+      emissiveMap: map,
       emissive: 0xffffff,
       emissiveIntensity: 0.45,
-      bumpMap: texture,
+      bumpMap,
       bumpScale: 0.02,
       roughness: 0.85,
       metalness: 0.02,
@@ -929,7 +939,14 @@ export default class EarthScene {
   addInputHandlers() {
     const onPointerDown = (e) => {
       if (e.button !== 0) return;
-      if (e.target.closest('#start-overlay, #start-btn, #settings-panel, #settings-btn')) return;
+      if (getPhase() === 'cockpit' || (this.characterPopup && this.characterPopup.isOpen())) return;
+      if (
+        e.target.closest(
+          '#start-overlay, #start-btn, #settings-panel, #settings-btn, #prepare-container, #prepare-btn, #character-popup, #cockpit-placeholder, #board-transition-overlay'
+        )
+      ) {
+        return;
+      }
       this.isDragging = true;
       this.pointer.x = e.clientX;
       this.pointer.y = e.clientY;
@@ -979,6 +996,151 @@ export default class EarthScene {
     }
     if (this.launchSite) {
       this.launchSite.update(delta);
+    }
+  }
+
+  lookAtPoint(targetVector) {
+    if (!targetVector || !this.camera) return;
+    const dir = new THREE.Vector3().subVectors(targetVector, this.camera.position);
+    this.yaw = Math.atan2(-dir.x, -dir.z);
+    const rawPitch = Math.atan2(dir.y, Math.hypot(dir.x, dir.z));
+    this.pitch = Math.max(PITCH_MIN, Math.min(PITCH_MAX, rawPitch));
+    this.camera.rotation.order = 'YXZ';
+    this.camera.rotation.y = this.yaw;
+    this.camera.rotation.x = this.pitch;
+  }
+
+  setLocation(name) {
+    if (name !== 'start' && name !== 'launchSite') return;
+    this.currentLocation = name;
+    if (name === 'launchSite') {
+      setPhase('launchSite');
+      if (this.prepareBtn) {
+        this.prepareBtn.classList.remove('fade-out');
+      }
+      if (this.launchSite && this.camera) {
+        const vp = this.launchSite.viewPoint;
+        this.camera.position.copy(vp.position);
+        this.lookAtPoint(vp.lookAt);
+      }
+    } else if (name === 'start') {
+      setPhase('earth');
+      if (this.camera && this.originalPosition) {
+        this.camera.position.copy(this.originalPosition);
+        this.yaw = this.originalYaw;
+        this.pitch = this.originalPitch;
+        this.camera.rotation.order = 'YXZ';
+        this.camera.rotation.y = this.yaw;
+        this.camera.rotation.x = this.pitch;
+      }
+    }
+    this.updatePrepareButtonVisibility();
+  }
+
+  initPrepareButton() {
+    this.prepareContainer = document.getElementById('prepare-container');
+    this.prepareBtn = document.getElementById('prepare-btn');
+
+    if (this.prepareBtn) {
+      this.prepareBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!this.characterPopup) {
+          console.warn('Character popup not initialized');
+          return;
+        }
+        if (this.prepareContainer) {
+          this.prepareContainer.classList.remove('visible');
+          this.prepareContainer.classList.add('hidden');
+        }
+        this.characterPopup.open();
+      });
+    }
+
+    const updateVis = () => {
+      this.updatePrepareButtonVisibility();
+    };
+
+    if (typeof MutationObserver !== 'undefined') {
+      const panel = document.getElementById('settings-panel');
+      if (panel) {
+        const panelObserver = new MutationObserver(updateVis);
+        panelObserver.observe(panel, { attributes: true, attributeFilter: ['class', 'style'] });
+      }
+      const overlay = document.getElementById('start-overlay');
+      if (overlay) {
+        const overlayObserver = new MutationObserver(updateVis);
+        overlayObserver.observe(overlay, { attributes: true, attributeFilter: ['class', 'style'] });
+      }
+    }
+
+    const startBtn = document.getElementById('start-btn');
+    if (startBtn) {
+      startBtn.addEventListener('click', () => {
+        setTimeout(updateVis, 50);
+        setTimeout(updateVis, 1050);
+      });
+    }
+
+    window.addEventListener('click', () => {
+      setTimeout(updateVis, 0);
+    });
+
+    this.updatePrepareButtonVisibility();
+  }
+
+  onPopupClosed() {
+    if (this.characterPopup && this.characterPopup.isBoarding()) {
+      return;
+    }
+    if (this.prepareBtn && getPhase() === 'launchSite') {
+      this.prepareBtn.focus();
+    }
+    if (this.currentLocation === 'launchSite' && getPhase() === 'launchSite') {
+      this.updatePrepareButtonVisibility();
+    }
+  }
+
+  onBackToLaunchSite() {
+    this.currentLocation = 'launchSite';
+    setPhase('launchSite');
+    if (this.launchSite && this.camera) {
+      const vp = this.launchSite.viewPoint;
+      this.camera.position.copy(vp.position);
+      this.lookAtPoint(vp.lookAt);
+    }
+    this.updatePrepareButtonVisibility();
+  }
+
+  isOverlayGone() {
+    const overlay = document.getElementById('start-overlay');
+    if (!overlay) return true;
+    return overlay.style.display === 'none' || overlay.classList.contains('fade-out');
+  }
+
+  isSettingsClosed() {
+    const panel = document.getElementById('settings-panel');
+    if (!panel) return true;
+    return !panel.classList.contains('open');
+  }
+
+  updatePrepareButtonVisibility() {
+    if (!this.prepareContainer) return;
+    const isPopupOpen = this.characterPopup && this.characterPopup.isOpen();
+    const isBoarding = this.characterPopup && this.characterPopup.isBoarding();
+    const shouldBeVisible =
+      this.currentLocation === 'launchSite' &&
+      getPhase() === 'launchSite' &&
+      !isBoarding &&
+      this.isSettingsClosed() &&
+      this.isOverlayGone() &&
+      !isPopupOpen;
+
+    if (shouldBeVisible) {
+      this.prepareContainer.classList.remove('hidden');
+      this.prepareContainer.classList.add('visible');
+    } else {
+      this.prepareContainer.classList.remove('visible');
+      this.prepareContainer.classList.add('hidden');
     }
   }
 

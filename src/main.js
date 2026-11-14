@@ -109,21 +109,54 @@ applySettingsUI();
 
 // ---- Create the 3D scene (after settings are wired) ----
 let earthScene;
+let animId = null;
+let isEarthPaused = false;
+let clock = null;
+
+function animate() {
+  animId = requestAnimationFrame(animate);
+  if (isEarthPaused) return;
+  const delta = clock.getDelta();
+  earthScene.update(delta);
+  earthScene.render();
+}
+
+export function pauseEarthScene() {
+  isEarthPaused = true;
+  if (animId) {
+    cancelAnimationFrame(animId);
+    animId = null;
+  }
+}
+
+export function resumeEarthScene() {
+  if (!isEarthPaused) return;
+  isEarthPaused = false;
+  if (clock) {
+    clock.getDelta(); // Reset clock delta so resuming does not cause a time jump
+  }
+  if (!animId) {
+    animId = requestAnimationFrame(animate);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.pauseEarthScene = pauseEarthScene;
+  window.resumeEarthScene = resumeEarthScene;
+}
+
 try {
   earthScene = new EarthScene(container, settings);
+  if (typeof window !== 'undefined') {
+    window.earthScene = earthScene;
+  }
 } catch (err) {
   console.error('Failed to initialize EarthScene:', err);
 }
 
 if (earthScene) {
-  const clock = new THREE.Clock();
-
-  function animate() {
-    requestAnimationFrame(animate);
-    const delta = clock.getDelta();
-    earthScene.update(delta);
-    earthScene.render();
-  }
-
+  clock = new THREE.Clock();
   animate();
 }
+
+export { earthScene };
