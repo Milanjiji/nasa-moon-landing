@@ -1,16 +1,23 @@
 import * as THREE from 'three';
 import { createMoonTextures } from '../world/moonTexture.js';
 import { createEarthTexture } from '../world/earthTexture.js';
+import { buildDashboard, checkCockpitVisibility, surfaceY } from './cockpitDashboard.js';
+import { createScreens } from '../cockpit/screens.js';
+import { createInteraction } from '../cockpit/interaction.js';
+import { getLoadout } from '../game/state.js';
+import { getItem } from '../data/gear.js';
+
+export { surfaceY };
 
 // ---------------------------------------------------------------------------
-// NaN/Inf vertex checker helper & mesh adder
+// Helpers
 // ---------------------------------------------------------------------------
 function checkFinite(geometry, name) {
-  if (!geometry || !geometry.attributes || !geometry.attributes.position) return;
-  const array = geometry.attributes.position.array;
-  for (let i = 0; i < array.length; i += 3) {
-    if (!isFinite(array[i]) || !isFinite(array[i + 1]) || !isFinite(array[i + 2])) {
-      console.warn(`NaN/Inf in geometry "${name}" at vertex ${i / 3}: (${array[i]}, ${array[i + 1]}, ${array[i + 2]})`);
+  if (!geometry?.attributes?.position) return;
+  const arr = geometry.attributes.position.array;
+  for (let i = 0; i < arr.length; i += 3) {
+    if (!isFinite(arr[i]) || !isFinite(arr[i + 1]) || !isFinite(arr[i + 2])) {
+      console.warn(`NaN/Inf in geometry "${name}" at vertex ${i / 3}: (${arr[i]}, ${arr[i + 1]}, ${arr[i + 2]})`);
       return;
     }
   }
@@ -19,6 +26,7 @@ function checkFinite(geometry, name) {
 function addPart(scene, geo, mat, name, pos, rot) {
   checkFinite(geo, name);
   const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = name;
   if (pos) mesh.position.set(pos[0], pos[1], pos[2]);
   if (rot) mesh.rotation.set(rot[0] || 0, rot[1] || 0, rot[2] || 0);
   scene.add(mesh);
@@ -39,18 +47,14 @@ function buildShell(scene) {
   const ribGeo = new THREE.TorusGeometry(1.88, 0.02, 8, 32, Math.PI);
   checkFinite(ribGeo, 'cockpit-rib');
   for (const z of [-1.4, -0.7, 0.0, 0.7, 1.4, 2.1]) {
-    const rib = new THREE.Mesh(ribGeo, ribMat);
-    rib.position.set(0, 0, z);
-    scene.add(rib);
+    const rib = new THREE.Mesh(ribGeo, ribMat); rib.position.set(0, 0, z); scene.add(rib);
   }
 
   const stripMat = new THREE.MeshStandardMaterial({ color: 0x9fc4ff, emissive: 0x9fc4ff, emissiveIntensity: 1.4 });
   const stripGeo = new THREE.BoxGeometry(0.04, 0.015, 3.8);
   checkFinite(stripGeo, 'cockpit-strip');
   for (const x of [-0.5, 0.5]) {
-    const strip = new THREE.Mesh(stripGeo, stripMat);
-    strip.position.set(x, 1.82, 0.3);
-    scene.add(strip);
+    const strip = new THREE.Mesh(stripGeo, stripMat); strip.position.set(x, 1.82, 0.3); scene.add(strip);
   }
 
   const floorCanvas = document.createElement('canvas');
@@ -63,13 +67,10 @@ function buildShell(scene) {
   const floorGeo = new THREE.PlaneGeometry(3.8, 4.2);
   floorGeo.rotateX(-Math.PI / 2);
   addPart(scene, floorGeo, new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.9, metalness: 0.1 }), 'floor', [0, 0, 0.3]);
-
-  // Back wall and hatch
   addPart(scene, new THREE.PlaneGeometry(3.8, 2.0), shellMat, 'backwall', [0, 1.0, 2.4], [0, Math.PI, 0]);
   addPart(scene, new THREE.TorusGeometry(0.45, 0.025, 8, 24), ribMat, 'hatch-rim', [0, 1.0, 2.38]);
   addPart(scene, new THREE.CircleGeometry(0.44, 24), new THREE.MeshStandardMaterial({ color: 0x111622, roughness: 0.9 }), 'hatch', [0, 1.0, 2.375], [0, Math.PI, 0]);
 
-  // Front bulkhead with window hole
   const outer = new THREE.Shape();
   outer.moveTo(-1.9, 0); outer.lineTo(1.9, 0); outer.lineTo(1.9, 2.0); outer.lineTo(-1.9, 2.0); outer.closePath();
   const hole = new THREE.Path();
@@ -102,7 +103,6 @@ function buildWindow(scene) {
   sctx.clearRect(0, 0, 256, 256);
   sctx.strokeStyle = 'rgba(230, 240, 255, 0.06)'; sctx.lineWidth = 14;
   sctx.beginPath(); sctx.moveTo(30, 240); sctx.lineTo(220, 20); sctx.stroke();
-
   addPart(scene, winGeo, new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(sCanvas), transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }), 'scratch', [0, 0, -1.804], [0.21, 0, 0]);
 }
 
@@ -112,7 +112,6 @@ function buildWindow(scene) {
 function buildOutside(scene, updateFns) {
   scene.background = new THREE.Color('#02030a');
 
-  // Stars (3000 points, safe unit vectors)
   const starGeo = new THREE.BufferGeometry();
   const starCount = 3000;
   const positions = new Float32Array(starCount * 3);
@@ -120,13 +119,10 @@ function buildOutside(scene, updateFns) {
 
   for (let i = 0; i < starCount; i++) {
     let vx, vy, vz, len;
-    do {
-      vx = Math.random() * 2 - 1; vy = Math.random() * 2 - 1; vz = Math.random() * 2 - 1;
-      len = Math.hypot(vx, vy, vz);
-    } while (len < 1e-6);
+    do { vx = Math.random() * 2 - 1; vy = Math.random() * 2 - 1; vz = Math.random() * 2 - 1; len = Math.hypot(vx, vy, vz); } while (len < 1e-6);
     const inv = 300 / len;
     positions[i * 3] = vx * inv; positions[i * 3 + 1] = vy * inv; positions[i * 3 + 2] = vz * inv;
-    const c = Math.random() < 0.6 ? [0.95, 0.98, 1.0] : Math.random() < 0.85 ? [0.82, 0.9, 1.0] : [1.0, 0.92, 0.82];
+    const c = Math.random() < 0.6 ? [0.95, 0.98, 1.0] : (Math.random() < 0.85 ? [0.82, 0.9, 1.0] : [1.0, 0.92, 0.82]);
     colors[i * 3] = c[0]; colors[i * 3 + 1] = c[1]; colors[i * 3 + 2] = c[2];
   }
   starGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -136,7 +132,6 @@ function buildOutside(scene, updateFns) {
   stars.frustumCulled = false;
   scene.add(stars);
 
-  // The Moon
   const moonTextures = createMoonTextures();
   const moon = addPart(scene, new THREE.SphereGeometry(40, 64, 64), new THREE.MeshStandardMaterial({
     map: moonTextures.map, bumpMap: moonTextures.bumpMap, bumpScale: 0.04,
@@ -144,7 +139,6 @@ function buildOutside(scene, updateFns) {
     roughness: 0.85, metalness: 0.02,
   }), 'moon', [35, 28, -220]);
 
-  // Glow sprite
   const glowCanvas = document.createElement('canvas');
   glowCanvas.width = 128; glowCanvas.height = 128;
   const gctx = glowCanvas.getContext('2d');
@@ -156,7 +150,6 @@ function buildOutside(scene, updateFns) {
   glowSprite.scale.set(120, 120, 1);
   scene.add(glowSprite);
 
-  // Earth below
   const earth = addPart(scene, new THREE.SphereGeometry(120, 48, 48), new THREE.MeshStandardMaterial({ map: createEarthTexture(), roughness: 0.8, metalness: 0.1 }), 'earth', [-80, -150, -260]);
   addPart(scene, new THREE.SphereGeometry(124, 48, 48), new THREE.MeshBasicMaterial({ color: 0x5aa0ff, transparent: true, opacity: 0.35, side: THREE.BackSide, blending: THREE.AdditiveBlending }), 'atmo', [-80, -150, -260]);
 
@@ -167,73 +160,7 @@ function buildOutside(scene, updateFns) {
 }
 
 // ---------------------------------------------------------------------------
-// 4) The Dashboard & Screen Panels
-// ---------------------------------------------------------------------------
-function buildDashboard(scene, updateFns) {
-  const anchors = {};
-
-  addPart(scene, new THREE.BoxGeometry(3.2, 0.65, 0.95), new THREE.MeshStandardMaterial({ color: 0x1a2230, metalness: 0.4, roughness: 0.6 }), 'dash-base', [0, 0.55, -1.35], [0.35, 0, 0]);
-  addPart(scene, new THREE.BoxGeometry(3.24, 0.03, 0.04), new THREE.MeshStandardMaterial({ color: 0x3a4a66, metalness: 0.5 }), 'dash-trim', [0, 0.88, -0.92]);
-
-  const screenMat = new THREE.MeshStandardMaterial({ color: 0x060b14, emissive: 0x0b1a33, emissiveIntensity: 0.5, roughness: 0.2, metalness: 0.1 });
-  const bezelMat = new THREE.MeshStandardMaterial({ color: 0x2b3850, roughness: 0.6 });
-  const ledGeo = new THREE.SphereGeometry(0.008, 8, 8);
-  const ledMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x38bdf8, emissiveIntensity: 1.5 });
-
-  function addScreen(id, width, height, x, y, z, rotX) {
-    const mesh = addPart(scene, new THREE.PlaneGeometry(width, height), screenMat.clone(), `screen-${id}`, [x, y, z], [rotX, 0, 0]);
-    mesh.name = `screen-${id}`;
-    addPart(scene, new THREE.BoxGeometry(width + 0.04, height + 0.04, 0.015), bezelMat, `bezel-${id}`, [x, y, z - 0.008], [rotX, 0, 0]);
-    addPart(scene, ledGeo, ledMat, 'led', [x + width / 2 - 0.02, y + height / 2 - 0.02, z + 0.005]);
-    anchors[id] = { mesh, width, height };
-  }
-
-  addScreen('main', 1.1, 0.55, -0.55, 0.72, -1.25, 0.35);
-  addScreen('left', 0.6, 0.4, -1.25, 0.72, -1.25, 0.35);
-  addScreen('right', 0.6, 0.4, 0.1, 0.72, -1.25, 0.35);
-  addScreen('top', 1.4, 0.3, 0.0, 1.05, -1.75, 0.15);
-  addScreen('co', 0.8, 0.5, 0.85, 0.72, -1.25, 0.35);
-
-  // Instanced buttons
-  const btnGeo = new THREE.BoxGeometry(0.045, 0.02, 0.045);
-  checkFinite(btnGeo, 'btn');
-  const btnColors = [0x38bdf8, 0xf59e0b, 0x22c55e, 0xef4444];
-  const btnInst = new THREE.InstancedMesh(btnGeo, new THREE.MeshStandardMaterial({ roughness: 0.4, metalness: 0.2 }), 24);
-  const dummy = new THREE.Object3D();
-  dummy.rotation.x = 0.35;
-  let bIdx = 0;
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 8; c++) {
-      dummy.position.set(-1.5 + c * 0.07, 0.68 + r * 0.025, -1.02 - r * 0.06);
-      dummy.updateMatrix();
-      btnInst.setMatrixAt(bIdx, dummy.matrix);
-      btnInst.setColorAt(bIdx, new THREE.Color(btnColors[(r + c) % btnColors.length]));
-      bIdx++;
-    }
-  }
-  btnInst.instanceMatrix.needsUpdate = true;
-  if (btnInst.instanceColor) btnInst.instanceColor.needsUpdate = true;
-  scene.add(btnInst);
-
-  // Highlighted Launch button
-  const lBtnMat = new THREE.MeshStandardMaterial({ color: 0x16a34a, emissive: 0x22c55e, emissiveIntensity: 0.8 });
-  const launchButton = addPart(scene, new THREE.CylinderGeometry(0.04, 0.04, 0.025, 16), lBtnMat, 'launch-btn', [-0.02, 0.66, -1.05], [0.35, 0, 0]);
-  launchButton.name = 'launchButton';
-
-  // Overhead panel strip
-  addPart(scene, new THREE.BoxGeometry(0.7, 0.03, 1.2), new THREE.MeshStandardMaterial({ color: 0x1c2433, metalness: 0.4 }), 'overhead', [0, 1.85, 0.1]);
-
-  let pulseTime = 0;
-  updateFns.push((delta) => {
-    pulseTime += delta * 2.5;
-    lBtnMat.emissiveIntensity = 0.6 + Math.sin(pulseTime) * 0.4;
-  });
-
-  return anchors;
-}
-
-// ---------------------------------------------------------------------------
-// 5) Seats
+// 4) Seats
 // ---------------------------------------------------------------------------
 function buildSeats(scene) {
   const seatMat = new THREE.MeshStandardMaterial({ color: 0x2a3345, roughness: 0.8, flatShading: true });
@@ -252,26 +179,18 @@ function buildSeats(scene) {
       addPart(scene, new THREE.BoxGeometry(0.08, 0.06, 0.03), new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8 }), 'buckle', [x, 0.72, 0.68]);
     }
   }
-
-  addSeat(-0.55, false); // Left seat (player)
-  addSeat(0.65, true);   // Right seat (co-pilot)
+  addSeat(-0.55, false);
+  addSeat(0.65, true);
 }
 
 // ---------------------------------------------------------------------------
-// 6) Lighting
+// 5) Lighting
 // ---------------------------------------------------------------------------
 function buildLighting(scene) {
   scene.add(new THREE.HemisphereLight(0x6f8fc4, 0x141b27, 0.55));
-  const pDash = new THREE.PointLight(0x6fa8ff, 5.0, 4.0, 2.0);
-  pDash.position.set(0, 1.4, -1.2);
-  const pCeil = new THREE.PointLight(0xcfe0ff, 3.0, 5.0, 2.0);
-  pCeil.position.set(0, 1.7, 0.2);
-  const pAmber = new THREE.PointLight(0xffb36b, 1.5, 3.0, 2.0);
-  pAmber.position.set(0.7, 1.0, 0.3);
-  scene.add(pDash);
-  scene.add(pCeil);
-  scene.add(pAmber);
-
+  const pDash = new THREE.PointLight(0x6fa8ff, 5.0, 4.0, 2.0); pDash.position.set(0, 1.4, -1.2); scene.add(pDash);
+  const pCeil = new THREE.PointLight(0xcfe0ff, 3.0, 5.0, 2.0); pCeil.position.set(0, 1.7, 0.2); scene.add(pCeil);
+  const pAmber = new THREE.PointLight(0xffb36b, 1.5, 3.0, 2.0); pAmber.position.set(0.7, 1.0, 0.3); scene.add(pAmber);
   const dirMoon = new THREE.DirectionalLight(0xdbe8ff, 1.3);
   dirMoon.position.set(3.5, 2.8, -15.0);
   dirMoon.target.position.set(0, 0.8, -1.4);
@@ -280,22 +199,15 @@ function buildLighting(scene) {
 }
 
 // ---------------------------------------------------------------------------
-// 7) Look Controls & Sway
+// 6) Look Controls & Sway
 // ---------------------------------------------------------------------------
 function buildLookControls(camera, canvas, updateFns) {
-  const PITCH_MIN = -35 * (Math.PI / 180);
-  const PITCH_MAX = 30 * (Math.PI / 180);
-  const YAW_MIN = -75 * (Math.PI / 180);
-  const YAW_MAX = 75 * (Math.PI / 180);
-
   camera.rotation.order = 'YXZ';
-  let yaw = camera.rotation.y;
-  let pitch = camera.rotation.x;
-  let targetYaw = yaw;
-  let targetPitch = pitch;
-  let isDragging = false;
-  let lastX = 0;
-  let lastY = 0;
+  const startYaw = camera.rotation.y, startPitch = camera.rotation.x;
+  const YAW_MIN = startYaw - 75 * (Math.PI / 180), YAW_MAX = startYaw + 75 * (Math.PI / 180);
+  const PITCH_MIN = startPitch - 35 * (Math.PI / 180), PITCH_MAX = startPitch + 30 * (Math.PI / 180);
+  let yaw = startYaw, pitch = startPitch, targetYaw = startYaw, targetPitch = startPitch;
+  let isDragging = false, lastX = 0, lastY = 0;
 
   function getSettings() {
     const s = { invertH: false, invertV: false, sensH: 1, sensV: 1 };
@@ -309,18 +221,14 @@ function buildLookControls(camera, canvas, updateFns) {
   canvas.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || e.target.closest('#settings-btn, #settings-panel, #cockpit-dev-back-btn')) return;
     isDragging = true;
-    lastX = e.clientX;
-    lastY = e.clientY;
+    lastX = e.clientX; lastY = e.clientY;
     try { canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
   });
 
   canvas.addEventListener('pointermove', (e) => {
     if (!isDragging) return;
-    const dx = e.clientX - lastX;
-    const dy = e.clientY - lastY;
-    lastX = e.clientX;
-    lastY = e.clientY;
-
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
     const s = getSettings();
     targetYaw -= dx * 0.0035 * s.sensH * (s.invertH ? -1 : 1);
     targetPitch += dy * 0.0035 * s.sensV * (s.invertV ? -1 : 1);
@@ -339,18 +247,12 @@ function buildLookControls(camera, canvas, updateFns) {
   const baseCamPos = new THREE.Vector3(-0.55, 1.15, 0.35);
   let swayTime = 0;
   const prefersReduced = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
   updateFns.push((delta) => {
-    yaw += (targetYaw - yaw) * 0.2;
-    pitch += (targetPitch - pitch) * 0.2;
-    camera.rotation.y = yaw;
-    camera.rotation.x = pitch;
-
+    yaw += (targetYaw - yaw) * 0.2; pitch += (targetPitch - pitch) * 0.2;
+    camera.rotation.y = yaw; camera.rotation.x = pitch;
     if (!prefersReduced) {
       swayTime += delta * 0.8;
-      const swayX = Math.sin(swayTime) * 0.004;
-      const swayY = Math.cos(swayTime * 0.7) * 0.003;
-      camera.position.set(baseCamPos.x + swayX, baseCamPos.y + swayY, baseCamPos.z);
+      camera.position.set(baseCamPos.x + Math.sin(swayTime) * 0.004, baseCamPos.y + Math.cos(swayTime * 0.7) * 0.003, baseCamPos.z);
     }
   });
 
@@ -368,9 +270,10 @@ export function createCockpitScene(containerElement) {
   if (!containerElement) throw new Error('Container element required for cockpit scene');
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(62, 1, 0.05, 400);
+  const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 700);
   camera.position.set(-0.55, 1.15, 0.35);
-  camera.lookAt(0, 1.35, -1.8);
+  camera.lookAt(0.0, 1.20, -1.8);
+  camera.rotation.order = 'YXZ';
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -388,8 +291,11 @@ export function createCockpitScene(containerElement) {
 
   const updateFns = [];
   let screenAnchors = {};
-  let isRunningState = false;
-  let animId = null;
+  let launchButtonMesh = null;
+  let sampleButtonsList = [], interactiveTargets = [], dashboardOk = false;
+  let screensOk = false, interactionOk = false, screensInstance = null;
+  let interactionInstance = null, customLaunchCallback = null;
+  let isRunningState = false, animId = null, hasCheckedVisibility = false;
   const clock = new THREE.Clock();
 
   function resize() {
@@ -404,7 +310,54 @@ export function createCockpitScene(containerElement) {
   try { buildShell(scene); } catch (e) { console.error('EarthScene part failed: cockpit shell', e); }
   try { buildWindow(scene); } catch (e) { console.error('EarthScene part failed: cockpit window', e); }
   try { buildOutside(scene, updateFns); } catch (e) { console.error('EarthScene part failed: cockpit outside', e); }
-  try { screenAnchors = buildDashboard(scene, updateFns); } catch (e) { console.error('EarthScene part failed: cockpit dashboard', e); }
+  try {
+    const dashResult = buildDashboard(scene, camera, updateFns);
+    screenAnchors = dashResult.anchors;
+    launchButtonMesh = dashResult.launchButton;
+    sampleButtonsList = dashResult.sampleButtons;
+    interactiveTargets = dashResult.interactiveTargets || [];
+    dashboardOk = true;
+  } catch (e) {
+    console.error('EarthScene part failed: cockpit dashboard', e);
+  }
+
+  try {
+    screensInstance = createScreens({
+      anchors: screenAnchors,
+      getLoadout,
+      renderer,
+    });
+    screensOk = true;
+  } catch (e) {
+    console.error('EarthScene part failed: cockpit screens', e);
+  }
+
+  try {
+    interactionInstance = createInteraction({
+      domElement: canvas,
+      camera,
+      getTargets: () => interactiveTargets,
+      onLaunchPressed: () => {
+        if (typeof customLaunchCallback === 'function') {
+          customLaunchCallback();
+        } else {
+          console.log('Launch button pressed');
+          if (screensInstance && typeof screensInstance.setLogLine === 'function') {
+            screensInstance.setLogLine('Launch sequence is not ready yet');
+          }
+        }
+      },
+      onLog: (text) => {
+        if (screensInstance && typeof screensInstance.setLogLine === 'function') {
+          screensInstance.setLogLine(text);
+        }
+      },
+    });
+    interactionOk = true;
+  } catch (e) {
+    console.error('EarthScene part failed: cockpit interaction', e);
+  }
+
   try { buildSeats(scene); } catch (e) { console.error('EarthScene part failed: cockpit seats', e); }
   try { buildLighting(scene); } catch (e) { console.error('EarthScene part failed: cockpit lighting', e); }
   try { buildLookControls(camera, canvas, updateFns); } catch (e) { console.error('EarthScene part failed: cockpit controls', e); }
@@ -419,6 +372,9 @@ export function createCockpitScene(containerElement) {
     for (let i = 0; i < updateFns.length; i++) {
       try { updateFns[i](delta); } catch { /* ignore */ }
     }
+    if (screensInstance) {
+      try { screensInstance.update(delta); } catch { /* ignore */ }
+    }
     renderer.render(scene, camera);
   }
 
@@ -426,8 +382,33 @@ export function createCockpitScene(containerElement) {
     if (isRunningState) return;
     isRunningState = true;
     clock.getDelta();
+    if (screensInstance) {
+      try { screensInstance.reset(); } catch { /* ignore */ }
+    }
+
+    if (interactionInstance) {
+      try {
+        const l = typeof getLoadout === 'function' ? getLoadout() : null;
+        const sel = l ? l.selection : null;
+        const itemNames = sel ? ['suit', 'helmet', 'gloves', 'boots', 'backpack'].map((c) => getItem(c, sel[c])?.name).filter(Boolean) : [];
+        const weightVal = l && l.totals ? l.totals.weight : 0;
+        interactionInstance.setAriaSummary(`Cockpit screens show your gear: ${itemNames.length > 0 ? itemNames.join(', ') : 'no gear chosen'}, weight ${weightVal} of 60 kilograms.`);
+      } catch { /* ignore */ }
+    }
+
     resize();
     animId = requestAnimationFrame(animate);
+
+    if (!hasCheckedVisibility) {
+      hasCheckedVisibility = true;
+      setTimeout(() => {
+        try {
+          checkCockpitVisibility(scene, camera, screenAnchors, launchButtonMesh, sampleButtonsList);
+        } catch (chkErr) {
+          console.error('Cockpit visibility check failed:', chkErr);
+        }
+      }, 1000);
+    }
   }
 
   function stop() {
@@ -436,11 +417,25 @@ export function createCockpitScene(containerElement) {
     if (animId) { cancelAnimationFrame(animId); animId = null; }
   }
 
+  function dispose() {
+    stop();
+    window.removeEventListener('resize', resize);
+    if (interactionInstance) {
+      try { interactionInstance.dispose(); } catch { /* ignore */ }
+    }
+  }
+
   return {
     start,
     stop,
     isRunning: () => isRunningState,
     getScreenAnchors: () => screenAnchors,
+    getLaunchButton: () => launchButtonMesh,
+    dashboardOk,
+    screensOk,
+    interactionOk,
+    onLaunchPressed: (cb) => { customLaunchCallback = cb; },
+    dispose,
     resize,
   };
 }
