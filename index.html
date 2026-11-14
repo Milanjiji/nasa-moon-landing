@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Moonshot Mission</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="start-overlay">
+      <h1>Moonshot Mission</h1>
+      <button id="start-btn">Let&rsquo;s go to the Moon</button>
+    </div>
+    <button id="settings-btn" title="Settings">&#9881;</button>
+    <div id="settings-panel">
+      <div class="settings-header">Settings</div>
+      <label class="settings-row"><input type="checkbox" id="invertH" /> <span>Invert horizontal drag</span></label>
+      <label class="settings-row"><input type="checkbox" id="invertV" /> <span>Invert vertical drag</span></label>
+      <label class="settings-row">Horizontal sensitivity <input type="range" id="sensH" min="0" max="3" step="0.1" value="1" /></label>
+      <label class="settings-row">Vertical sensitivity <input type="range" id="sensV" min="0" max="3" step="0.1" value="1" /></label>
+      <div class="settings-actions">
+        <button id="reset-btn">Reset</button>
+        <button id="close-btn">Close</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
