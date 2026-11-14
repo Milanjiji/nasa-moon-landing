@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import createLaunchSite from './launchSite.js';
 
 const STAR_COUNT = 3500;
 const MOON_ROTATION_SPEED = 0.025;
@@ -7,8 +8,13 @@ const TREE_ROUND_COUNT = 125;
 
 // Pitch limits: stop the player from looking under the ground,
 // while still letting them look up toward the Moon.
-const PITCH_MIN = -1.3;
+// PITCH_MIN allows at least 80 degrees up (~-1.4 rad) to see the rocket/tower.
+const PITCH_MIN = -1.5;
 const PITCH_MAX = 0.35;
+
+// Module-level launch pad reference for terrain flattening.
+let launchPadCenter = null;
+let launchPadBaseHeight = 0;
 
 const SKY_TOP = '#050914';
 const SKY_HORIZON = '#14264a';
@@ -42,16 +48,29 @@ function checkFinite(geometry, name) {
 // Uses safe smoothstep (clamped t, no divide by zero).
 // ---------------------------------------------------------------------------
 function terrainHeight(x, z) {
-  const d = Math.sqrt(x * x + z * z);
-  let t = (d - 12) / (80 - 12);
-  t = Math.max(0, Math.min(1, t));
-  const falloff = t * t * (3 - 2 * t); // smoothstep
+  const dPlayer = Math.sqrt(x * x + z * z);
+  let tPlayer = (dPlayer - 12) / (80 - 12);
+  tPlayer = Math.max(0, Math.min(1, tPlayer));
+  const falloffPlayer = tPlayer * tPlayer * (3 - 2 * tPlayer);
   const noise =
     Math.sin(x * 0.05 + z * 0.03) * 3.0 +
     Math.cos(x * 0.04 - z * 0.06) * 2.5 +
     Math.sin(x * 0.03) * Math.cos(z * 0.03) * 2.0 +
     Math.sin(x * 0.08 + z * 0.05) * 1.5;
-  return falloff * noise;
+  let height = falloffPlayer * noise;
+
+  if (launchPadCenter) {
+    const dPad = Math.sqrt(
+      (x - launchPadCenter.x) * (x - launchPadCenter.x) +
+        (z - launchPadCenter.z) * (z - launchPadCenter.z)
+    );
+    let tPad = (dPad - 30) / (50 - 30);
+    tPad = Math.max(0, Math.min(1, tPad));
+    const padFalloff = tPad * tPad * (3 - 2 * tPad);
+    height = padFalloff * height + (1 - padFalloff) * launchPadBaseHeight;
+  }
+
+  return height;
 }
 
 const STAR_VERTEX = `
@@ -103,6 +122,7 @@ export default class EarthScene {
       stars: false,
       ground: false,
       ridges: false,
+      launchSite: false,
       trees: false,
       drag: false,
     };
@@ -177,6 +197,21 @@ export default class EarthScene {
       console.error('EarthScene part failed: stars', error);
     }
 
+    // ---- Launch site (computes pad center, builds pad/rocket/tower/lights) ----
+    try {
+      this.launchSite = createLaunchSite({
+        scene: this.scene,
+        groundHeight: terrainHeight,
+        startYaw: 0,
+        pixelRatio: Math.min(window.devicePixelRatio, 2),
+      });
+      launchPadCenter = this.launchSite.padCenter;
+      launchPadBaseHeight = launchPadCenter.y;
+      this.setupStatus.launchSite = true;
+    } catch (error) {
+      console.error('EarthScene part failed: launchSite', error);
+    }
+
     // ---- Ground ----
     try {
       this.initGround();
@@ -217,19 +252,68 @@ export default class EarthScene {
       console.error('EarthScene part failed: drag', error);
     }
 
+    // Save original camera state for dev key E (return to start).
+    this.originalPosition = this.camera.position.clone();
+    this.originalYaw = this.yaw;
+    this.originalPitch = this.pitch;
+
+    // ---- Dev keys: R = launch pad, E = back to start ----
+    try {
+      const padKeyHandler = (e) => {
+        // Ignore when settings panel is open.
+        const panel = document.getElementById('settings-panel');
+        if (panel && panel.classList.contains('open')) return;
+        if (!this.launchSite) return;
+
+        if (e.key === 'r' || e.key === 'R') {
+          const vp = this.launchSite.viewPoint;
+          this.camera.position.copy(vp.position);
+          this.camera.lookAt(vp.lookAt);
+          const dir = new THREE.Vector3()
+            .subVectors(vp.lookAt, vp.position)
+            .normalize();
+          this.yaw = Math.atan2(dir.x, -dir.z);
+          this.pitch = -Math.asin(dir.y);
+          this.camera.rotation.order = 'YXZ';
+          this.camera.rotation.y = this.yaw;
+          this.camera.rotation.x = this.pitch;
+        } else if (e.key === 'e' || e.key === 'E') {
+          this.camera.position.copy(this.originalPosition);
+          this.yaw = this.originalYaw;
+          this.pitch = this.originalPitch;
+          this.camera.rotation.order = 'YXZ';
+          this.camera.rotation.y = this.yaw;
+          this.camera.rotation.x = this.pitch;
+        }
+      };
+      window.addEventListener('keydown', padKeyHandler);
+      console.log('Dev keys: R = launch pad, E = back to start');
+    } catch (error) {
+      console.error('EarthScene part failed: devKeys', error);
+    }
+
     // ---- Status summary ----
-    const treeCount = this.setupStatus.trees
-      ? TREE_PINE_COUNT + TREE_ROUND_COUNT
-      : 0;
-    console.log(
-      `EarthScene ready: sky=${this.setupStatus.sky ? 'ok' : 'FAILED'} ` +
-        `moon=${this.setupStatus.moon ? 'ok' : 'FAILED'} ` +
-        `stars=${this.setupStatus.stars ? 'ok' : 'FAILED'} ` +
-        `ground=${this.setupStatus.ground ? 'ok' : 'FAILED'} ` +
-        `ridges=${this.setupStatus.ridges ? 'ok' : 'FAILED'} ` +
-        `trees=${this.setupStatus.trees ? 'ok' : 'FAILED'} ` +
-        `(${treeCount} trees) drag=${this.setupStatus.drag ? 'ok' : 'FAILED'}`
-    );
+    try {
+      const skyStatus = this.setupStatus.sky ? 'ok' : 'FAILED';
+      const moonStatus = this.setupStatus.moon ? 'ok' : 'FAILED';
+      const starsStatus = this.setupStatus.stars ? 'ok' : 'FAILED';
+      const groundStatus = this.setupStatus.ground ? 'ok' : 'FAILED';
+      const ridgesStatus = this.setupStatus.ridges ? 'ok' : 'FAILED';
+      const launchSiteStatus = this.setupStatus.launchSite ? 'ok' : 'FAILED';
+      const treesStatus = this.setupStatus.trees ? 'ok' : 'FAILED';
+      const treeCount = this.setupStatus.trees
+        ? TREE_PINE_COUNT + TREE_ROUND_COUNT
+        : 0;
+      const dragStatus = this.setupStatus.drag ? 'ok' : 'FAILED';
+      const padCenterStatus = launchPadCenter
+        ? `(${launchPadCenter.x.toFixed(1)},${launchPadCenter.z.toFixed(1)})`
+        : 'n/a';
+
+      const statusMessage = `EarthScene ready: sky=${skyStatus} moon=${moonStatus} stars=${starsStatus} ground=${groundStatus} ridges=${ridgesStatus} launchSite=${launchSiteStatus} trees=${treesStatus} (${treeCount} trees) drag=${dragStatus} padCenter=${padCenterStatus}`;
+      console.log(statusMessage);
+    } catch (error) {
+      console.error('EarthScene part failed: status', error);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -731,6 +815,12 @@ export default class EarthScene {
       if (x * x + z * z < 12 * 12) return false;
       // Clear 10-degree path straight toward Moon (-Z).
       if (z < 0 && Math.abs(x) < 3) return false;
+      // No trees within 55 units of the launch pad.
+      if (launchPadCenter) {
+        const dx = x - launchPadCenter.x;
+        const dz = z - launchPadCenter.z;
+        if (dx * dx + dz * dz < 55 * 55) return false;
+      }
       // Minimum distance from already-placed trees.
       for (const p of placed) {
         const dx = x - p.x;
@@ -886,6 +976,9 @@ export default class EarthScene {
     this.uTime += delta;
     if (this.stars && this.stars.material.uniforms) {
       this.stars.material.uniforms.uTime.value = this.uTime;
+    }
+    if (this.launchSite) {
+      this.launchSite.update(delta);
     }
   }
 
