@@ -7,7 +7,7 @@ import { buildShell, buildWindow, buildSeats, buildLighting } from './cockpitCab
 import { buildDashboard, checkCockpitVisibility, surfaceY } from './cockpitDashboard.js';
 import { createScreens } from '../cockpit/screens.js';
 import { createInteraction } from '../cockpit/interaction.js';
-import { getLoadout, getMission, setMission } from '../game/state.js';
+import { getLoadout, getMission, setMission, getPhase } from '../game/state.js';
 import { getItem } from '../data/gear.js';
 import { createLaunchEffects } from '../cockpit/launchEffects.js';
 import { createLaunchController } from '../cockpit/launchController.js';
@@ -17,6 +17,8 @@ import { createLandingController } from '../cockpit/landingController.js';
 import { createFloaters } from '../cockpit/floaters.js';
 import { playStepOut } from '../cockpit/stepOut.js';
 import { isDev } from '../dev/devFlag.js';
+import { createCockpitHint } from '../ui/cockpitHint.js';
+import { shouldShowLaunchHint } from '../game/hintLogic.js';
 
 export { surfaceY };
 

@@ -162,6 +162,7 @@ export function createInteraction({ domElement, camera, getTargets, onLaunchPres
       if (panel && panel.classList.contains('open')) return;
       const cockpitView = document.getElementById('cockpit-view');
       if (cockpitView && cockpitView.classList.contains('hidden')) return;
+      if (document.activeElement?.id === 'cockpit-hint-btn' || e.target?.id === 'cockpit-hint-btn') return;
 
       triggerLaunch();
     }

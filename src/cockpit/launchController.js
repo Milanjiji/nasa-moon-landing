@@ -129,9 +129,21 @@ export function createLaunchController({ screens, effects, getLoadout, launchBut
     }
   });
 
+  const armedCallbacks = [];
+  function notifyArmed(armed) {
+    for (let i = 0; i < armedCallbacks.length; i++) {
+      try {
+        armedCallbacks[i](armed);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  }
+
   function startAmberPulse() {
     isAmberPulsing = true;
     amberTimer = 0;
+    notifyArmed(true);
     if (launchButtonMesh?.material) {
       if (origBtnEmissive === null && launchButtonMesh.material.emissive) {
         origBtnEmissive = launchButtonMesh.material.emissive.getHex();
@@ -142,12 +154,15 @@ export function createLaunchController({ screens, effects, getLoadout, launchBut
   }
 
   function stopAmberPulse() {
-    isAmberPulsing = false;
-    amberTimer = 0;
-    if (launchButtonMesh?.material && origBtnEmissive !== null) {
-      launchButtonMesh.material.emissive.setHex(origBtnEmissive);
-      launchButtonMesh.material.color.setHex(origBtnColor);
-      launchButtonMesh.material.emissiveIntensity = origBtnIntensity;
+    if (isAmberPulsing) {
+      isAmberPulsing = false;
+      amberTimer = 0;
+      notifyArmed(false);
+      if (launchButtonMesh?.material && origBtnEmissive !== null) {
+        launchButtonMesh.material.emissive.setHex(origBtnEmissive);
+        launchButtonMesh.material.color.setHex(origBtnColor);
+        launchButtonMesh.material.emissiveIntensity = origBtnIntensity;
+      }
     }
   }
 
@@ -364,7 +379,9 @@ export function createLaunchController({ screens, effects, getLoadout, launchBut
     reset,
     skipToOrbit,
     isRunning,
+    isArmed: () => isAmberPulsing,
     update,
+    onArmedChange: (cb) => { if (typeof cb === 'function') armedCallbacks.push(cb); },
     onLaunchComplete: (cb) => { if (typeof cb === 'function') launchCompleteCallbacks.push(cb); },
     onContinue: (cb) => { if (typeof cb === 'function') continueCallbacks.push(cb); },
     dispose,

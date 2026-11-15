@@ -232,7 +232,8 @@ export function buildDashboard(scene, camera, updateFns) {
   let pulseTime = 0;
   updateFns.push((delta) => {
     pulseTime += delta * 2.8;
-    lBtnMat.emissiveIntensity = 1.0 + Math.sin(pulseTime) * 0.8;
+    const ampMult = launchButton?.userData?.pulseMultiplier || 1.0;
+    lBtnMat.emissiveIntensity = 1.0 + Math.sin(pulseTime) * (0.8 * ampMult);
   });
 
   return { anchors, launchButton, sampleButtons, interactiveTargets, screenConfigs };

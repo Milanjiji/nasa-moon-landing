@@ -1132,7 +1132,188 @@ canvas {
   #launch-hint.shrunk,
   #launch-hint.fade-out,
   #launch-pointer,
-  #earth-caption {
+  #earth-caption,
+  #cockpit-hint,
+  #cockpit-hint.shrunk,
+  #cockpit-hint.fade-out,
+  .cockpit-launch-ring {
     transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* ---- Cockpit Launch Hint ---- */
+#cockpit-hint {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: 560px;
+  width: calc(100% - 32px);
+  background: rgba(7, 18, 42, 0.94);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(63, 208, 255, 0.35);
+  border-radius: 16px;
+  padding: 16px 24px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+  text-align: center;
+  transition: opacity 0.5s ease, transform 0.5s ease;
+  pointer-events: auto;
+  opacity: 0;
+}
+
+#cockpit-hint.shrunk {
+  padding: 10px 18px;
+  width: auto;
+}
+
+#cockpit-hint.shrunk .cockpit-hint-title,
+#cockpit-hint.shrunk .cockpit-hint-desc {
+  display: none;
+}
+
+#cockpit-hint.fade-out {
+  opacity: 0 !important;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(12px);
+}
+
+.cockpit-hint-title {
+  margin: 0 0 6px;
+  font-family: inherit;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.cockpit-hint-desc {
+  margin: 0 0 14px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: #94a3b8;
+}
+
+#cockpit-hint-btn {
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 10px 24px;
+  border: none;
+  border-radius: 999px;
+  background: #3fd0ff;
+  color: #040c1a;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 0 16px rgba(63, 208, 255, 0.4);
+  transition: transform 0.15s ease, box-shadow 0.2s ease, opacity 0.3s ease;
+}
+
+#cockpit-hint-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 24px rgba(63, 208, 255, 0.6);
+}
+
+#cockpit-hint-btn:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+}
+
+#cockpit-hint-btn .keycap {
+  background: rgba(4, 12, 26, 0.18);
+  border: 1px solid rgba(4, 12, 26, 0.35);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 0.8rem;
+  font-family: monospace;
+  font-weight: 700;
+  line-height: 1;
+}
+
+#cockpit-launch-marker {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+  overflow: hidden;
+}
+
+.cockpit-launch-ring {
+  position: absolute;
+  width: 64px;
+  height: 64px;
+  border: 2px solid #34d399;
+  border-radius: 50%;
+  box-shadow: 0 0 16px rgba(52, 211, 153, 0.6);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  animation: cockpitRingPulse 1.4s ease-in-out infinite;
+}
+
+.cockpit-launch-pill {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  margin-top: -38px;
+  background: rgba(7, 18, 42, 0.92);
+  border: 1px solid #34d399;
+  color: #34d399;
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+}
+
+.cockpit-launch-edge-pill {
+  position: fixed;
+  top: 55%;
+  transform: translateY(-50%);
+  background: rgba(7, 18, 42, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid #34d399;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #34d399;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.cockpit-launch-edge-pill.side-left {
+  left: 20px;
+  right: auto;
+}
+
+.cockpit-launch-edge-pill.side-right {
+  right: 20px;
+  left: auto;
+}
+
+@keyframes cockpitRingPulse {
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.25);
+    opacity: 0.5;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.9;
   }
 }
