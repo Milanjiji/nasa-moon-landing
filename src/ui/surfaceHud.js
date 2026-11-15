@@ -1,6 +1,7 @@
 import { formatHours, lookAtEarthAmount } from '../game/surfaceStats.js';
 import { levelColor } from '../game/loadoutSummary.js';
 import { getMission, setMission } from '../game/state.js';
+import { meterLevel, meterColor } from '../game/baseSetup.js';
 
 export function createSurfaceHud({ uiRoot }) {
   const root = uiRoot || document.body;
@@ -17,6 +18,12 @@ export function createSurfaceHud({ uiRoot }) {
   let baseNote = null;
   let flashOverlay = null;
   let toastElem = null;
+  let announceElem = null;
+
+  let isBaseMode = false;
+  let baseMeters = { power: 0, air: 0, food: 0, radiation: 0, health: 100 };
+  const chipElements = new Map();
+  let currentHudStats = null;
 
   let photoHandler = null;
   let walkHandler = null;
@@ -158,6 +165,13 @@ export function createSurfaceHud({ uiRoot }) {
     toastElem.style.cssText = 'position:fixed;top:24px;left:50%;transform:translateX(-50%);z-index:95;background:#0d1e3d;border:1px solid #3fd0ff;color:#e8f3ff;padding:8px 22px;border-radius:20px;font-size:0.9rem;font-weight:600;box-shadow:0 8px 30px rgba(0,0,0,0.6);opacity:0;transition:opacity 0.3s ease;pointer-events:none;';
     hudContainer.appendChild(toastElem);
 
+    // 10. Visually hidden aria-live announcement
+    announceElem = document.createElement('div');
+    announceElem.id = 'surface-hud-announce';
+    announceElem.setAttribute('aria-live', 'polite');
+    announceElem.style.cssText = 'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;';
+    hudContainer.appendChild(announceElem);
+
     root.appendChild(hudContainer);
   } catch (err) {
     console.error('EarthScene part failed: surface hud creation', err);
@@ -192,9 +206,72 @@ export function createSurfaceHud({ uiRoot }) {
     }
   }
 
+  function renderChips() {
+    if (!chipsContainer) return;
+    chipsContainer.innerHTML = '';
+    chipElements.clear();
+
+    if (isBaseMode) {
+      const keys = [
+        { key: 'power', label: 'Power', val: baseMeters.power, hidden: true },
+        { key: 'air', label: 'Air', val: baseMeters.air, hidden: false },
+        { key: 'food', label: 'Food', val: baseMeters.food, hidden: true },
+        { key: 'radiation', label: 'Radiation', val: baseMeters.radiation, hidden: false },
+        { key: 'health', label: 'Health', val: baseMeters.health, hidden: false },
+      ];
+      for (let i = 0; i < keys.length; i++) {
+        const item = keys[i];
+        const chip = document.createElement('div');
+        const col = item.key === 'health'
+          ? (item.val >= 70 ? '#34d399' : (item.val >= 40 ? '#ffb020' : '#ef4444'))
+          : meterColor(meterLevel(item.val));
+        chip.style.cssText = `background:rgba(7,18,42,0.85);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);padding:6px 14px;border-radius:18px;font-size:0.82rem;font-weight:600;display:${item.hidden ? 'none' : 'flex'};opacity:${item.hidden ? '0' : '1'};align-items:center;gap:8px;box-shadow:0 4px 15px rgba(0,0,0,0.5);width:fit-content;transition:opacity 0.4s ease, border-color 0.3s;`;
+        chip.innerHTML = `
+          <span class="chip-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${col};"></span>
+          <span style="color:#94a3b8;">${item.label}</span>
+          <span class="chip-val" style="color:#f8fafc;">${item.val}</span>
+        `;
+        chipsContainer.appendChild(chip);
+        chipElements.set(item.label, {
+          chip,
+          dot: chip.querySelector('.chip-dot'),
+          valEl: chip.querySelector('.chip-val'),
+          currentVal: item.val,
+        });
+      }
+    } else if (currentHudStats) {
+      const s = currentHudStats;
+      const healthCol = s.health >= 70 ? '#34d399' : (s.health >= 40 ? '#ffb020' : '#ef4444');
+      const airCol = s.oxygenRatio >= 0.5 ? '#34d399' : (s.oxygenRatio >= 0.25 ? '#ffb020' : '#ef4444');
+      const powerCol = s.powerPct >= 60 ? '#34d399' : (s.powerPct >= 30 ? '#ffb020' : '#ef4444');
+      const radCol = levelColor(s.radiationRatio >= 0.6 ? 'good' : (s.radiationRatio >= 0.35 ? 'warn' : 'bad'));
+
+      const chipData = [
+        { label: 'Health', val: `${s.health}`, col: healthCol, tip: 'Vital life signs' },
+        { label: 'Air', val: formatHours(s.oxygenHours), col: airCol, tip: 'Remaining oxygen' },
+        { label: 'Power', val: `${s.powerPct}%`, col: powerCol, tip: 'Lander solar storage' },
+        { label: 'Radiation shield', val: `${s.radiationValue} of ${s.radiationMax}`, col: radCol, tip: 'Radiation shielding' },
+      ];
+
+      for (let i = 0; i < chipData.length; i++) {
+        const item = chipData[i];
+        const chip = document.createElement('div');
+        chip.title = item.tip;
+        chip.style.cssText = 'background:rgba(7,18,42,0.85);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);padding:6px 14px;border-radius:18px;font-size:0.82rem;font-weight:600;display:flex;align-items:center;gap:8px;box-shadow:0 4px 15px rgba(0,0,0,0.5);width:fit-content;';
+        chip.innerHTML = `
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${item.col};"></span>
+          <span style="color:#94a3b8;">${item.label}</span>
+          <span style="color:#f8fafc;">${item.val}</span>
+        `;
+        chipsContainer.appendChild(chip);
+      }
+    }
+  }
+
   function show(stats, site) {
     if (!hudContainer) return;
     currentSite = site;
+    currentHudStats = stats;
     standingTime = 0;
     sawEarthTime = 0;
     hasShownEarthPrompt = false;
@@ -211,34 +288,7 @@ export function createSurfaceHud({ uiRoot }) {
       setHeavyFrame(Boolean(stats?.heavyFrame));
     }
 
-    // Render chips
-    if (chipsContainer) {
-      chipsContainer.innerHTML = '';
-      const healthCol = stats.health >= 70 ? '#34d399' : (stats.health >= 40 ? '#ffb020' : '#ef4444');
-      const airCol = stats.oxygenRatio >= 0.5 ? '#34d399' : (stats.oxygenRatio >= 0.25 ? '#ffb020' : '#ef4444');
-      const powerCol = stats.powerPct >= 60 ? '#34d399' : (stats.powerPct >= 30 ? '#ffb020' : '#ef4444');
-      const radCol = levelColor(stats.radiationRatio >= 0.6 ? 'good' : (stats.radiationRatio >= 0.35 ? 'warn' : 'bad'));
-
-      const chipData = [
-        { label: 'Health', val: `${stats.health}`, col: healthCol, tip: 'Vital life signs' },
-        { label: 'Air', val: formatHours(stats.oxygenHours), col: airCol, tip: 'Remaining oxygen' },
-        { label: 'Power', val: `${stats.powerPct}%`, col: powerCol, tip: 'Lander solar storage' },
-        { label: 'Radiation shield', val: `${stats.radiationValue} of ${stats.radiationMax}`, col: radCol, tip: 'Radiation shielding' },
-      ];
-
-      for (let i = 0; i < chipData.length; i++) {
-        const item = chipData[i];
-        const chip = document.createElement('div');
-        chip.title = item.tip;
-        chip.style.cssText = 'background:rgba(7,18,42,0.85);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);padding:6px 14px;border-radius:18px;font-size:0.82rem;font-weight:600;display:flex;align-items:center;gap:8px;box-shadow:0 4px 15px rgba(0,0,0,0.5);width:fit-content;';
-        chip.innerHTML = `
-          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${item.col};"></span>
-          <span style="color:#94a3b8;">${item.label}</span>
-          <span style="color:#f8fafc;">${item.val}</span>
-        `;
-        chipsContainer.appendChild(chip);
-      }
-    }
+    renderChips();
 
     if (baseBtnContainer) baseBtnContainer.style.display = 'none';
     if (baseNote) baseNote.style.display = 'none';
@@ -347,6 +397,89 @@ export function createSurfaceHud({ uiRoot }) {
     };
   }
 
+  function onBaseContinue(cb) {
+    if (typeof cb === 'function') {
+      baseContinueHandler = cb;
+    }
+  }
+
+  function setBaseMode(on) {
+    isBaseMode = Boolean(on);
+    if (baseBtnContainer) baseBtnContainer.style.display = 'none';
+    if (baseNote) baseNote.style.display = 'none';
+    renderChips();
+  }
+
+  function showChip(name, bool) {
+    const entry = chipElements.get(name);
+    if (!entry) return;
+    if (bool) {
+      entry.chip.style.display = 'flex';
+      requestAnimationFrame(() => {
+        if (entry.chip) entry.chip.style.opacity = '1';
+      });
+    } else {
+      entry.chip.style.opacity = '0';
+      entry.chip.style.display = 'none';
+    }
+  }
+
+  function setMeters(newMeters, { animate = true } = {}) {
+    if (!newMeters) return;
+    const prefersReduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    const shouldAnimate = animate && !prefersReduced;
+
+    const names = [
+      { key: 'power', label: 'Power' },
+      { key: 'air', label: 'Air' },
+      { key: 'food', label: 'Food' },
+      { key: 'radiation', label: 'Radiation' },
+      { key: 'health', label: 'Health' },
+    ];
+
+    for (let i = 0; i < names.length; i++) {
+      const item = names[i];
+      const val = newMeters[item.key];
+      if (typeof val !== 'number') continue;
+      baseMeters[item.key] = val;
+      const entry = chipElements.get(item.label);
+      if (!entry) continue;
+
+      const fromVal = entry.currentVal;
+      entry.currentVal = val;
+
+      const targetCol = item.key === 'health'
+        ? (val >= 70 ? '#34d399' : (val >= 40 ? '#ffb020' : '#ef4444'))
+        : meterColor(meterLevel(val));
+
+      if (entry.dot) entry.dot.style.background = targetCol;
+
+      if (fromVal !== val) {
+        if (announceElem) {
+          announceElem.textContent = `${item.label} ${val}`;
+        }
+        entry.chip.style.borderColor = '#3fd0ff';
+        setTimeout(() => {
+          if (entry.chip) entry.chip.style.borderColor = 'rgba(255,255,255,0.12)';
+        }, 400);
+
+        if (shouldAnimate) {
+          const startTime = performance.now();
+          const dur = 800;
+          const step = (now) => {
+            const p = Math.min(1.0, (now - startTime) / dur);
+            const cur = Math.round(fromVal + (val - fromVal) * p);
+            if (entry.valEl) entry.valEl.textContent = `${cur}`;
+            if (p < 1.0) requestAnimationFrame(step);
+          };
+          requestAnimationFrame(step);
+        } else {
+          if (entry.valEl) entry.valEl.textContent = `${val}`;
+        }
+      }
+    }
+  }
+
   function setWalkHandler(fn) {
     walkHandler = fn;
   }
@@ -357,6 +490,10 @@ export function createSurfaceHud({ uiRoot }) {
     setHeavyFrame,
     showCaption,
     setBaseButton,
+    setBaseMode,
+    showChip,
+    setMeters,
+    onBaseContinue,
     onPhoto,
     setWalkHandler,
     toast,

@@ -5,6 +5,9 @@ import { createSurfaceSky, dirFromAngles } from './surface/sky.js';
 import { WALK_RADIUS, FOOTPRINT_SPACING, getSurfaceStart } from '../game/surfaceStats.js';
 import { SITES, getSite } from '../data/sites.js';
 import { getMission, setMission } from '../game/state.js';
+import { isDev } from '../dev/devFlag.js';
+import { createBaseBuilder } from './surface/baseBuilder.js';
+import { getWalkVectors, moveStep } from '../game/walkMath.js';
 
 export function createSurfaceScene(containerElement) {
   if (!containerElement) throw new Error('Container required for surface scene');
@@ -32,6 +35,7 @@ export function createSurfaceScene(containerElement) {
   let terrainInst = null;
   let landerInst = null;
   let skyInst = null;
+  let baseBuilderInst = null;
 
   let currentSite = SITES[0];
   let currentStats = getSurfaceStart({}, {}, currentSite);
@@ -49,6 +53,8 @@ export function createSurfaceScene(containerElement) {
   // Controls state
   const keysDown = new Set();
   let touchWalkDir = 0;
+  const tmpCamDir = new THREE.Vector3();
+  let lastWalkVectors = { forward: { x: 0, z: -1 }, right: { x: 1, z: 0 } };
   let walkedDistance = 0;
   let isLeftStep = false;
   let bobPhase = 0;
@@ -59,6 +65,10 @@ export function createSurfaceScene(containerElement) {
   const ladderDuration = 4.5;
   const ladderCallbacks = [];
   let freeControlsUnlocked = false;
+
+  // Controls lock and camera fly
+  let controlsLocked = false;
+  let flyState = null;
 
   // Loop & timing
   const clock = new THREE.Clock();
@@ -84,18 +94,25 @@ export function createSurfaceScene(containerElement) {
   dustPoints.frustumCulled = false;
   scene.add(dustPoints);
 
-  function spawnDustPuff(x, y, z) {
+  function spawnDustPuff(x, y, z, moveAngle = null) {
+    const kickX = typeof moveAngle === 'number' ? Math.sin(moveAngle) * 0.15 : 0;
+    const kickZ = typeof moveAngle === 'number' ? Math.cos(moveAngle) * 0.15 : 0;
     for (let i = 0; i < DUST_COUNT; i++) {
       dustPos[i * 3] = x + (Math.random() - 0.5) * 0.2;
       dustPos[i * 3 + 1] = y + 0.05;
       dustPos[i * 3 + 2] = z + (Math.random() - 0.5) * 0.2;
-      dustVel[i * 3] = (Math.random() - 0.5) * 0.3;
+      dustVel[i * 3] = (Math.random() - 0.5) * 0.3 + kickX;
       dustVel[i * 3 + 1] = 0.25 + Math.random() * 0.25;
-      dustVel[i * 3 + 2] = (Math.random() - 0.5) * 0.3;
+      dustVel[i * 3 + 2] = (Math.random() - 0.5) * 0.3 + kickZ;
       dustLife[i] = 1.0;
     }
     dustGeo.attributes.position.needsUpdate = true;
     dustMat.opacity = 0.5;
+  }
+
+  function puffAt(pos) {
+    if (!pos) return;
+    spawnDustPuff(pos.x, pos.y, pos.z);
   }
 
   function updateDust(dt) {
@@ -126,7 +143,7 @@ export function createSurfaceScene(containerElement) {
 
   // Pointer drag look
   canvas.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || e.target.closest('#settings-btn, #settings-panel, #cockpit-dev-back-btn, .surface-hud-btn')) return;
+    if (controlsLocked || e.button !== 0 || e.target.closest('#settings-btn, #settings-panel, #cockpit-dev-back-btn, .surface-hud-btn')) return;
     isDragging = true;
     lastX = e.clientX;
     lastY = e.clientY;
@@ -134,7 +151,7 @@ export function createSurfaceScene(containerElement) {
   });
 
   canvas.addEventListener('pointermove', (e) => {
-    if (!isDragging) return;
+    if (controlsLocked || !isDragging) return;
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
     lastX = e.clientX;
@@ -167,10 +184,11 @@ export function createSurfaceScene(containerElement) {
 
   // Keyboard navigation
   window.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT') return;
+    if (controlsLocked || e.target.tagName === 'INPUT') return;
     keysDown.add(e.key);
   });
   window.addEventListener('keyup', (e) => {
+    if (controlsLocked) return;
     keysDown.delete(e.key);
   });
 
@@ -197,10 +215,44 @@ export function createSurfaceScene(containerElement) {
     const dt = Math.min(0.08, rawDelta);
     const prefersReduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
 
+    if (baseBuilderInst) {
+      baseBuilderInst.update(dt);
+    }
+
     yaw += (targetYaw - yaw) * 0.25;
     pitch += (targetPitch - pitch) * 0.25;
 
-    if (isLadderDescending) {
+    if (flyState) {
+      flyState.elapsed += dt;
+      const p = Math.min(1.0, flyState.elapsed / flyState.duration);
+      const ease = p * p * (3.0 - 2.0 * p);
+      const lift = Math.sin(p * Math.PI) * 0.8;
+
+      camera.position.x = flyState.startPos.x + (flyState.endPos.x - flyState.startPos.x) * ease;
+      camera.position.y = flyState.startPos.y + (flyState.endPos.y - flyState.startPos.y) * ease + lift;
+      camera.position.z = flyState.startPos.z + (flyState.endPos.z - flyState.startPos.z) * ease;
+
+      yaw = flyState.startYaw + (flyState.endYaw - flyState.startYaw) * ease;
+      pitch = flyState.startPitch + (flyState.endPitch - flyState.startPitch) * ease;
+      targetYaw = yaw;
+      targetPitch = pitch;
+      camera.rotation.set(pitch, yaw, 0, 'YXZ');
+
+      if (p >= 1.0) {
+        camera.position.copy(flyState.endPos);
+        yaw = flyState.endYaw;
+        pitch = flyState.endPitch;
+        targetYaw = yaw;
+        targetPitch = pitch;
+        camera.rotation.set(pitch, yaw, 0, 'YXZ');
+        camera.updateMatrixWorld(true);
+        const cb = flyState.onDone;
+        flyState = null;
+        if (typeof cb === 'function') {
+          try { cb(); } catch (err) { console.error(err); }
+        }
+      }
+    } else if (isLadderDescending) {
       ladderElapsed += dt;
       const p = Math.min(1.0, ladderElapsed / ladderDuration);
       const ease = p * p * (3 - 2 * p);
@@ -229,21 +281,25 @@ export function createSurfaceScene(containerElement) {
       let forward = 0;
       let strafe = 0;
 
-      if (keysDown.has('w') || keysDown.has('W') || keysDown.has('ArrowUp')) forward += 1;
-      if (keysDown.has('s') || keysDown.has('S') || keysDown.has('ArrowDown')) forward -= 1;
-      if (keysDown.has('a') || keysDown.has('A') || keysDown.has('ArrowLeft')) strafe -= 1;
-      if (keysDown.has('d') || keysDown.has('D') || keysDown.has('ArrowRight')) strafe += 1;
-      if (touchWalkDir !== 0) forward += touchWalkDir;
+      if (!controlsLocked) {
+        if (keysDown.has('w') || keysDown.has('W') || keysDown.has('ArrowUp')) forward += 1;
+        if (keysDown.has('s') || keysDown.has('S') || keysDown.has('ArrowDown')) forward -= 1;
+        if (keysDown.has('a') || keysDown.has('A') || keysDown.has('ArrowLeft')) strafe -= 1;
+        if (keysDown.has('d') || keysDown.has('D') || keysDown.has('ArrowRight')) strafe += 1;
+        if (touchWalkDir !== 0) forward += touchWalkDir;
+      }
+
+      forward = Math.max(-1, Math.min(1, forward));
+      strafe = Math.max(-1, Math.min(1, strafe));
+
+      camera.getWorldDirection(tmpCamDir);
+      const walkVectors = getWalkVectors(tmpCamDir.x, tmpCamDir.z, lastWalkVectors);
+      lastWalkVectors = walkVectors;
 
       const isWalking = forward !== 0 || strafe !== 0;
       if (isWalking) {
-        const len = Math.hypot(forward, strafe);
-        forward /= len;
-        strafe /= len;
-
-        const spd = (currentStats.walkSpeed || 1.35) * dt;
-        const dx = (Math.sin(yaw) * forward + Math.cos(yaw) * strafe) * spd;
-        const dz = (-Math.cos(yaw) * forward + Math.sin(yaw) * strafe) * spd;
+        const speed = currentStats.walkSpeed || 1.35;
+        const { dx, dz } = moveStep({ forward, strafe }, walkVectors, speed, dt);
 
         const nextX = playerPos.x + dx;
         const nextZ = playerPos.z + dz;
@@ -254,12 +310,14 @@ export function createSurfaceScene(containerElement) {
           playerPos.z = nextZ;
         }
 
-        walkedDistance += spd;
+        const stepDist = Math.hypot(dx, dz);
+        walkedDistance += stepDist;
         if (walkedDistance >= FOOTPRINT_SPACING) {
           walkedDistance = 0;
           isLeftStep = !isLeftStep;
-          if (terrainInst) terrainInst.addFootprint(playerPos, yaw, isLeftStep);
-          if (!prefersReduced) spawnDustPuff(playerPos.x, surfaceHeight(playerPos.x, playerPos.z), playerPos.z);
+          const moveAngle = Math.atan2(-dx, -dz);
+          if (terrainInst) terrainInst.addFootprint(playerPos, moveAngle, isLeftStep);
+          if (!prefersReduced) spawnDustPuff(playerPos.x, surfaceHeight(playerPos.x, playerPos.z), playerPos.z, moveAngle);
         }
 
         if (!prefersReduced) bobPhase += dt * 1.1 * Math.PI * 2;
@@ -296,6 +354,26 @@ export function createSurfaceScene(containerElement) {
     landerInst = createSurfaceLander({ scene, site, damage: mission.damage || 'none' });
     skyInst = createSurfaceSky({ scene, site });
 
+    if (baseBuilderInst) {
+      baseBuilderInst.reset();
+      baseBuilderInst.prepare(currentSite.id);
+    } else {
+      try {
+        baseBuilderInst = createBaseBuilder({
+          scene,
+          getHeight: surfaceHeight,
+          lander: landerInst,
+          puffAt,
+          site: currentSite
+        });
+        if (baseBuilderInst) {
+          baseBuilderInst.prepare(currentSite.id);
+        }
+      } catch (err) {
+        console.error('EarthScene part failed: base builder', err);
+      }
+    }
+
     const prefersReduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
 
     playerPos.set(0, 0, -3.0);
@@ -319,6 +397,9 @@ export function createSurfaceScene(containerElement) {
       camera.position.set(0, 4.4, -3.2);
     }
 
+    camera.rotation.set(pitch, yaw, 0, 'YXZ');
+    camera.updateMatrixWorld(true);
+
     clock.start();
     isRunningState = true;
     resize();
@@ -326,16 +407,18 @@ export function createSurfaceScene(containerElement) {
     if (animId) cancelAnimationFrame(animId);
     animId = requestAnimationFrame(animate);
 
-    if (autoCheckTimer) clearTimeout(autoCheckTimer);
-    autoCheckTimer = setTimeout(() => {
-      try {
-        if (typeof window !== 'undefined' && typeof window.__surfaceCheck === 'function') {
-          window.__surfaceCheck(site.id);
+    if (isDev) {
+      if (autoCheckTimer) clearTimeout(autoCheckTimer);
+      autoCheckTimer = setTimeout(() => {
+        try {
+          if (typeof window !== 'undefined' && typeof window.__surfaceCheck === 'function') {
+            window.__surfaceCheck(site.id);
+          }
+        } catch (err) {
+          console.error('Surface check call error:', err);
         }
-      } catch (err) {
-        console.error('Surface check call error:', err);
-      }
-    }, (skipLadder || prefersReduced ? 1000 : 5500));
+      }, (skipLadder || prefersReduced ? 1000 : 5500));
+    }
   }
 
   function takePhoto() {
@@ -398,6 +481,102 @@ export function createSurfaceScene(containerElement) {
     touchWalkDir = dir === 1 ? 1 : (dir === -1 ? -1 : 0);
   }
 
+  function lockControls(bool) {
+    controlsLocked = Boolean(bool);
+    if (controlsLocked) {
+      keysDown.clear();
+      isDragging = false;
+      touchWalkDir = 0;
+    }
+  }
+
+  function flyCamera(pose, seconds, onDone) {
+    if (!pose || !pose.position) return;
+    const dur = Math.max(0.01, seconds || 2.0);
+    const endPos = new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z);
+
+    let endYawVal = yaw;
+    let endPitchVal = pitch;
+
+    if (pose.lookAt) {
+      const dx = pose.lookAt.x - endPos.x;
+      const dy = pose.lookAt.y - endPos.y;
+      const dz = pose.lookAt.z - endPos.z;
+      endYawVal = Math.atan2(-dx, -dz);
+      endPitchVal = Math.atan2(dy, Math.hypot(dx, dz));
+    } else {
+      if (typeof pose.yaw === 'number') endYawVal = pose.yaw;
+      if (typeof pose.pitch === 'number') endPitchVal = pose.pitch;
+    }
+
+    let diffYaw = endYawVal - yaw;
+    while (diffYaw > Math.PI) diffYaw -= Math.PI * 2;
+    while (diffYaw < -Math.PI) diffYaw += Math.PI * 2;
+
+    flyState = {
+      startPos: camera.position.clone(),
+      endPos,
+      startYaw: yaw,
+      endYaw: yaw + diffYaw,
+      startPitch: pitch,
+      endPitch: endPitchVal,
+      duration: dur,
+      elapsed: 0,
+      onDone,
+    };
+  }
+
+  function getPose() {
+    return {
+      position: camera.position.clone(),
+      yaw,
+      pitch,
+    };
+  }
+
+  function setPose(pose) {
+    if (!pose) return;
+    if (pose.position) {
+      const nextX = pose.position.x;
+      const nextZ = pose.position.z;
+      const dist = Math.hypot(nextX, nextZ);
+      let clampedX = nextX;
+      let clampedZ = nextZ;
+      if (dist < 3.0) {
+        const factor = 3.0 / Math.max(0.001, dist);
+        clampedX *= factor;
+        clampedZ *= factor;
+      } else if (dist > WALK_RADIUS) {
+        const factor = WALK_RADIUS / dist;
+        clampedX *= factor;
+        clampedZ *= factor;
+      }
+      playerPos.set(clampedX, 0, clampedZ);
+      const groundY = surfaceHeight(clampedX, clampedZ);
+      const eyeY = Number.isFinite(pose.position.y) ? pose.position.y : groundY + 1.7;
+      camera.position.set(clampedX, eyeY, clampedZ);
+    }
+    let nextYaw = typeof pose.yaw === 'number' ? pose.yaw : null;
+    let nextPitch = typeof pose.pitch === 'number' ? pose.pitch : null;
+    if (nextYaw === null && pose.lookAt && pose.position) {
+      const dx = pose.lookAt.x - pose.position.x;
+      const dy = pose.lookAt.y - (pose.position.y || 1.7);
+      const dz = pose.lookAt.z - pose.position.z;
+      nextYaw = Math.atan2(-dx, -dz);
+      nextPitch = Math.atan2(dy, Math.hypot(dx, dz));
+    }
+    if (typeof nextYaw === 'number') {
+      yaw = nextYaw;
+      targetYaw = nextYaw;
+    }
+    if (typeof nextPitch === 'number') {
+      pitch = nextPitch;
+      targetPitch = nextPitch;
+    }
+    camera.rotation.set(pitch, yaw, 0, 'YXZ');
+    camera.updateMatrixWorld(true);
+  }
+
   function onLadderDone(cb) {
     if (typeof cb === 'function') ladderCallbacks.push(cb);
   }
@@ -407,6 +586,7 @@ export function createSurfaceScene(containerElement) {
     if (terrainInst) terrainInst.dispose();
     if (landerInst) landerInst.dispose();
     if (skyInst) skyInst.dispose();
+    if (baseBuilderInst) { baseBuilderInst.dispose(); baseBuilderInst = null; }
     dustGeo.dispose();
     dustMat.dispose();
     renderer.dispose();
@@ -424,6 +604,13 @@ export function createSurfaceScene(containerElement) {
     takePhoto,
     getView,
     setWalk,
+    lockControls,
+    flyCamera,
+    getPose,
+    setPose,
+    puffAt,
+    getLander: () => landerInst,
+    getBaseBuilder: () => baseBuilderInst,
     onLadderDone,
     dispose,
     getScene: () => scene,

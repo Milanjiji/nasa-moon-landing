@@ -157,10 +157,17 @@ export function createSitePanel({ uiRoot, onSelectSite }) {
     }
   }
 
+  function setSelectedSiteId(id) {
+    if (id && SITES.some((s) => s.id === id)) {
+      selectedSiteId = id;
+    }
+  }
+
   return {
     show,
     hide,
     dispose,
+    setSelectedSiteId,
     getSelectedSite: () => SITES.find((s) => s.id === selectedSiteId) || SITES[0],
   };
 }

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import EarthScene from './scenes/earthScene.js';
+import { isDev } from './dev/devFlag.js';
 
 const container = document.getElementById('app');
 const overlay = document.getElementById('start-overlay');
@@ -157,6 +158,24 @@ try {
 if (earthScene) {
   clock = new THREE.Clock();
   animate();
+}
+
+if (isDev) {
+  import('./dev/devJump.js').then((m) => {
+    if (m && typeof m.runJumpFromUrl === 'function') {
+      m.runJumpFromUrl();
+    }
+  }).catch((err) => {
+    console.error('Failed to load devJump:', err);
+  });
+
+  import('./dev/devMenu.js').then((m) => {
+    if (m && typeof m.createDevMenu === 'function') {
+      m.createDevMenu();
+    }
+  }).catch((err) => {
+    console.error('Failed to load devMenu:', err);
+  });
 }
 
 export { earthScene };

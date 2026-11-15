@@ -11,6 +11,11 @@ function checkFinite(geometry, name) {
   }
 }
 
+let currentCargoHatch = null;
+export function getCargoHatch() {
+  return currentCargoHatch;
+}
+
 export function createSurfaceLander({ scene, site, damage = 'none' }) {
   const group = new THREE.Group();
   group.name = 'surface-lander-group';
@@ -19,6 +24,8 @@ export function createSurfaceLander({ scene, site, damage = 'none' }) {
   const landerBody = new THREE.Group();
   landerBody.name = 'lander-body';
   group.add(landerBody);
+
+  let activeCargoHatch = null;
 
   const materials = [];
   const geometries = [];
@@ -238,6 +245,63 @@ export function createSurfaceLander({ scene, site, damage = 'none' }) {
       landerBody.rotation.z = 0.026; // ~1.5 degrees
     }
 
+    // 8. Cargo Hatch on +X side
+    const hatchGroup = new THREE.Group();
+    hatchGroup.name = 'lander-cargo-hatch';
+    hatchGroup.position.set(1.62, 0.55, 0);
+
+    const bayMat = regMat(new THREE.MeshStandardMaterial({
+      color: 0x0a0d14,
+      roughness: 0.95,
+      metalness: 0.1,
+    }));
+    const bayGeo = regGeo(new THREE.BoxGeometry(0.3, 1.4, 1.8), 'lander-cargo-bay');
+    const bayMesh = new THREE.Mesh(bayGeo, bayMat);
+    bayMesh.position.set(-0.15, 0.7, 0);
+    hatchGroup.add(bayMesh);
+
+    const hatchPivot = new THREE.Group();
+    hatchPivot.name = 'hatch-pivot';
+    hatchGroup.add(hatchPivot);
+
+    const doorGeo = regGeo(new THREE.BoxGeometry(0.06, 1.4, 1.8), 'lander-cargo-door');
+    const doorMesh = new THREE.Mesh(doorGeo, goldMat);
+    doorMesh.position.set(0.03, 0.7, 0);
+    doorMesh.castShadow = true;
+    doorMesh.receiveShadow = true;
+    hatchPivot.add(doorMesh);
+
+    const palletGeo = regGeo(new THREE.BoxGeometry(1.2, 0.08, 1.4), 'lander-cargo-pallet');
+    const palletMat = regMat(new THREE.MeshStandardMaterial({
+      color: 0x334155,
+      roughness: 0.6,
+      metalness: 0.4,
+    }));
+    const palletMesh = new THREE.Mesh(palletGeo, palletMat);
+    palletMesh.position.set(0.1, 0.08, 0);
+    palletMesh.castShadow = true;
+    palletMesh.receiveShadow = true;
+    hatchGroup.add(palletMesh);
+
+    landerBody.add(hatchGroup);
+
+    activeCargoHatch = {
+      group: hatchGroup,
+      open: (t) => {
+        const clampedT = Math.max(0, Math.min(1, t));
+        hatchPivot.rotation.z = -clampedT * (80 * Math.PI / 180);
+        palletMesh.position.x = 0.1 + clampedT * 1.6;
+        palletMesh.position.y = 0.08 - clampedT * 0.4;
+      },
+      getPalletAnchor: () => {
+        const v = new THREE.Vector3();
+        palletMesh.getWorldPosition(v);
+        v.y += 0.05;
+        return v;
+      },
+    };
+    currentCargoHatch = activeCargoHatch;
+
   } catch (err) {
     console.error('EarthScene part failed: surface lander construction', err);
   }
@@ -254,6 +318,7 @@ export function createSurfaceLander({ scene, site, damage = 'none' }) {
 
   return {
     group,
+    getCargoHatch: () => activeCargoHatch,
     dispose,
   };
 }

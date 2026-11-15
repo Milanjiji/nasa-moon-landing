@@ -4,6 +4,7 @@ import { getItem } from '../data/gear.js';
 import { formatTMinus, formatMissionTime } from '../game/launchSequence.js';
 import { drawFlightTopScreen, drawFlightMainScreen, drawFlightLeftScreen, drawFlightRightScreen, drawFlightCoScreen } from './flightScreens.js';
 import { drawLandingTopScreen, drawLandingMainScreen, drawLandingLeftScreen, drawLandingRightScreen, drawLandingCoScreen } from './landingScreens.js';
+import { isDev } from '../dev/devFlag.js';
 
 const FONT = "'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 const TICKER_MSGS = [
@@ -349,7 +350,7 @@ function drawCo(ctx, cw, ch, state, time, prefersReduced) {
   screenMetrics.co = { bottomY: Math.round(rcy + rr), height: ch };
 }
 
-if (typeof window !== 'undefined') {
+if (isDev && typeof window !== 'undefined') {
   window.__screenFitCheck = function() {
     const keys = ['main', 'left', 'right', 'top', 'co'];
     const rows = keys.map((k) => ({

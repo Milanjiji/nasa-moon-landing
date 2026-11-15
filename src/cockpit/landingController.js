@@ -14,6 +14,7 @@ import { summarizeLoadout } from '../game/loadoutSummary.js';
 import { createLandingPanel } from '../ui/landingPanel.js';
 import { createLandingEffects } from './landingEffects.js';
 import { createLandingFeed } from './landingFeed.js';
+import { isDev } from '../dev/devFlag.js';
 
 function lerp(a, b, t) {
   return a + (b - a) * Math.max(0, Math.min(1, t));
@@ -225,7 +226,7 @@ export function createLandingController({
       // Automated Landing sky view check 1 second after flip ends (tl >= 9)
       if (tl >= 9.0 && !checkSkyFired) {
         checkSkyFired = true;
-        if (typeof window !== 'undefined' && typeof window.__landingSkyPreview === 'function') {
+        if (isDev && typeof window !== 'undefined' && typeof window.__landingSkyPreview === 'function') {
           try {
             console.log('--- AUTO LANDING SKY VIEW CHECK (tl=9) ---');
             window.__landingSkyPreview();
@@ -235,6 +236,9 @@ export function createLandingController({
         }
       }
     }
+
+    if (stage === 'flip' && tl >= 8.0) stage = 'deorbit';
+    if (stage === 'deorbit' && tl >= 24.0) stage = 'descent';
 
     // Pass shake, flame, g to landing effects
     if (effects) {
@@ -339,6 +343,92 @@ export function createLandingController({
     }
   }
 
+  function jumpToDecision() {
+    running = true;
+    tl = 40.0;
+    stage = 'decision';
+    isClockFrozen = true;
+    const mission = getMission();
+    const site = getSite(mission.landingSite || 'ridge');
+    if (setOutsideView) setOutsideView(LANDING_SKY_VIEW);
+    const terrain = site?.terrain || 3;
+    const fuelMargin = mission.fuelMargin ?? 20;
+    const loadout = typeof getLoadout === 'function' ? getLoadout() : null;
+    const summary = summarizeLoadout(loadout ? loadout.totals : null);
+    const mobilityRatio = summary.mobility?.ratio ?? 0.5;
+    const estCont = computeLandingOutcome('continue', terrain, fuelMargin, mobilityRatio);
+    const estDiv = computeLandingOutcome('divert', terrain, fuelMargin, mobilityRatio);
+    const frame = getLandingFrame(tl, mission);
+    frame.tl = tl;
+    if (effects) effects.setFrame(frame, 0.016);
+    if (screens) {
+      screens.setLandingFrame({ frame, mission, stage, site, siteId: site?.id || 'ridge', decisionOpen: true, diverted: false, time: tl });
+      screens.setLogLine('Hazard detected! Select landing corridor adjustment.');
+    }
+    if (panel) {
+      panel.openDecision({
+        estimates: { continue: estCont, divert: estDiv },
+        fuelMargin,
+        terrain,
+        onChoose: handleDecisionChoice,
+      });
+    }
+  }
+
+  function jumpToTouchdown(landingPreset) {
+    running = false;
+    tl = 66.0;
+    stage = 'landed';
+    hasLandedFired = true;
+    hasTouchdownCardFired = true;
+    if (setOutsideView) setOutsideView(LANDING_SKY_VIEW);
+    if (floaters?.settle) floaters.settle(0.1);
+    if (effects) effects.startGround();
+    const mission = getMission();
+    const site = getSite(mission.landingSite || 'ridge');
+    const p = landingPreset || { choice: 'continue', risk: 5, level: 'soft', damage: 'none', healthPenalty: 0, fuelCost: 0 };
+    landingOutcome = {
+      choice: p.choice,
+      risk: p.risk,
+      level: p.level,
+      damage: p.damage,
+      healthPenalty: p.healthPenalty,
+      fuelCost: p.fuelCost,
+      fuelAfter: Math.max(0, (mission.fuelMargin ?? 20) - p.fuelCost),
+    };
+    mission.landed = true;
+    mission.landingChoice = p.choice;
+    mission.landingRisk = p.risk;
+    mission.landingLevel = p.level;
+    mission.damage = p.damage;
+    mission.healthPenalty = (mission.healthPenalty || 0) + p.healthPenalty;
+    mission.fuelMargin = landingOutcome.fuelAfter;
+    setMission(mission);
+    const frame = getLandingFrame(tl, mission);
+    frame.tl = tl;
+    if (screens) {
+      screens.setLandingFrame({ frame, mission, stage, site, siteId: site?.id || 'ridge', decisionOpen: false, diverted: p.choice === 'divert', time: tl });
+      screens.setLogLine('Touchdown confirmed. Engines shutdown.');
+    }
+    if (panel) {
+      panel.openTouchdown({
+        outcome: landingOutcome,
+        mission: getMission(),
+        site: site || { name: 'Sunny ridge' },
+        onContinue: () => {
+          if (landedContinueCallbacks.length > 0) {
+            for (let i = 0; i < landedContinueCallbacks.length; i++) {
+              try { landedContinueCallbacks[i](); } catch (e) { console.error(e); }
+            }
+          } else {
+            const note = document.getElementById('touchdown-next-note');
+            if (note) note.style.display = 'block';
+          }
+        },
+      });
+    }
+  }
+
   function dispose() {
     reset();
     if (typeof document !== 'undefined') {
@@ -355,6 +445,8 @@ export function createLandingController({
     reset,
     update,
     skipTo,
+    jumpToDecision,
+    jumpToTouchdown,
     isRunning: () => running,
     getStage: () => stage,
     onLandedContinue: (cb) => {

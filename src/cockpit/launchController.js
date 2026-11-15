@@ -2,6 +2,7 @@ import { getFrame, computeFuelMargin, MILESTONES } from '../game/launchSequence.
 import { WEIGHT_LIMIT } from '../data/gear.js';
 import { summarizeLoadout } from '../game/loadoutSummary.js';
 import { setPhase, setMission, resetMission } from '../game/state.js';
+import { isDev } from '../dev/devFlag.js';
 
 function createOrbitCard(uiRoot, onContinueClick) {
   const card = document.createElement('div');
@@ -316,11 +317,13 @@ export function createLaunchController({ screens, effects, getLoadout, launchBut
         setMission({ orbitReached: true });
         orbitCardDom.show(mission.fuelMargin);
 
-        setTimeout(() => {
-          if (typeof window !== 'undefined' && typeof window.__orbitCheck === 'function') {
-            window.__orbitCheck();
-          }
-        }, 1000);
+        if (isDev) {
+          setTimeout(() => {
+            if (typeof window !== 'undefined' && typeof window.__orbitCheck === 'function') {
+              window.__orbitCheck();
+            }
+          }, 1000);
+        }
 
         for (let i = 0; i < launchCompleteCallbacks.length; i++) {
           try { launchCompleteCallbacks[i](); } catch (err) { console.error(err); }
@@ -332,6 +335,19 @@ export function createLaunchController({ screens, effects, getLoadout, launchBut
       if (screens) screens.setLaunchFrame(frame, mission);
       if (effects) effects.setFrame(frame, delta);
     }
+  }
+
+  function skipToOrbit(fuelMargin) {
+    running = false;
+    orbitReached = true;
+    phase = 'orbit';
+    timelineT = 30;
+    mission = { fuelMargin: fuelMargin ?? 25 };
+    const finalFrame = getFrame(30, mission);
+    if (screens) screens.setLaunchFrame(finalFrame, mission);
+    if (effects) effects.setFrame(finalFrame, 0.016);
+    setMission({ orbitReached: true, fuelMargin: mission.fuelMargin });
+    orbitCardDom.show(mission.fuelMargin);
   }
 
   function dispose() {
@@ -346,6 +362,7 @@ export function createLaunchController({ screens, effects, getLoadout, launchBut
     start,
     abort,
     reset,
+    skipToOrbit,
     isRunning,
     update,
     onLaunchComplete: (cb) => { if (typeof cb === 'function') launchCompleteCallbacks.push(cb); },

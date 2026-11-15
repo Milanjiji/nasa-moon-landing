@@ -222,6 +222,15 @@ export function createGearPanel(containerElement, { onChange, onBoard } = {}) {
     notifyChange();
   }
 
+  function setSelection(newSelection) {
+    if (!newSelection || typeof newSelection !== 'object') return;
+    for (const cat of CATEGORIES) {
+      selection[cat] = newSelection[cat] || null;
+    }
+    if (weightWarning) weightWarning.classList.add('hidden');
+    notifyChange();
+  }
+
   for (const cat of CATEGORIES) {
     const section = document.createElement('div');
     section.className = 'gear-category-section';
@@ -279,6 +288,7 @@ export function createGearPanel(containerElement, { onChange, onBoard } = {}) {
 
   return {
     getSelection,
+    setSelection,
     getTotals,
     isComplete,
     reset,

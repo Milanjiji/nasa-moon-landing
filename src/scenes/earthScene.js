@@ -6,10 +6,12 @@ import { createMoonTextures } from '../world/moonTexture.js';
 import createCockpitScene from './cockpitScene.js';
 import createSurfaceScene from './surfaceScene.js';
 import createSurfaceHud from '../ui/surfaceHud.js';
+import { createBaseController } from '../surface/baseController.js';
 import { computeSurfaceCheck } from '../world/surfaceChecks.js';
 import { getMission, setMission, getLoadout } from '../game/state.js';
 import { getSite, SITES } from '../data/sites.js';
 import { getSurfaceStart } from '../game/surfaceStats.js';
+import { isDev } from '../dev/devFlag.js';
 
 const STAR_COUNT = 3500;
 const MOON_ROTATION_SPEED = 0.025;
@@ -283,33 +285,35 @@ export default class EarthScene {
     this.originalPitch = this.pitch;
 
     // ---- Dev keys: R = launch pad, E = back to start ----
-    try {
-      const padKeyHandler = (e) => {
-        // Ignore when settings panel or character popup is open, or during cockpit phase.
-        const panel = document.getElementById('settings-panel');
-        if (panel && panel.classList.contains('open')) return;
-        if (getPhase() === 'cockpit' || (this.characterPopup && this.characterPopup.isOpen())) return;
-        if (!this.launchSite) return;
+    if (isDev) {
+      try {
+        const padKeyHandler = (e) => {
+          // Ignore when settings panel or character popup is open, or during cockpit phase.
+          const panel = document.getElementById('settings-panel');
+          if (panel && panel.classList.contains('open')) return;
+          if (getPhase() === 'cockpit' || (this.characterPopup && this.characterPopup.isOpen())) return;
+          if (!this.launchSite) return;
 
-        if (e.key === 'r' || e.key === 'R') {
-          const vp = this.launchSite.viewPoint;
-          this.camera.position.copy(vp.position);
-          this.lookAtPoint(vp.lookAt);
-          this.setLocation('launchSite');
-        } else if (e.key === 'e' || e.key === 'E') {
-          this.camera.position.copy(this.originalPosition);
-          this.yaw = this.originalYaw;
-          this.pitch = this.originalPitch;
-          this.camera.rotation.order = 'YXZ';
-          this.camera.rotation.y = this.yaw;
-          this.camera.rotation.x = this.pitch;
-          this.setLocation('start');
-        }
-      };
-      window.addEventListener('keydown', padKeyHandler);
-      console.log('Dev keys: R = launch pad, E = back to start');
-    } catch (error) {
-      console.error('EarthScene part failed: devKeys', error);
+          if (e.key === 'r' || e.key === 'R') {
+            const vp = this.launchSite.viewPoint;
+            this.camera.position.copy(vp.position);
+            this.lookAtPoint(vp.lookAt);
+            this.setLocation('launchSite');
+          } else if (e.key === 'e' || e.key === 'E') {
+            this.camera.position.copy(this.originalPosition);
+            this.yaw = this.originalYaw;
+            this.pitch = this.originalPitch;
+            this.camera.rotation.order = 'YXZ';
+            this.camera.rotation.y = this.yaw;
+            this.camera.rotation.x = this.pitch;
+            this.setLocation('start');
+          }
+        };
+        window.addEventListener('keydown', padKeyHandler);
+        console.log('Dev keys: R = launch pad, E = back to start');
+      } catch (error) {
+        console.error('EarthScene part failed: devKeys', error);
+      }
     }
 
     // ---- Prepare button ----
@@ -390,6 +394,47 @@ export default class EarthScene {
           this.setupStatus.surface = true;
           this.surfaceHud.onPhoto(() => this.surfaceScene.takePhoto());
           this.surfaceHud.setWalkHandler((dir) => this.surfaceScene.setWalk(dir));
+          try {
+            this.baseController = createBaseController({
+              surfaceScene: this.surfaceScene,
+              surfaceHud: this.surfaceHud,
+              baseBuilder: null,
+              uiRoot: document.body
+            });
+            if (typeof window !== 'undefined') {
+              window.baseController = this.baseController;
+            }
+            this.surfaceHud.onBaseContinue(() => {
+              if (this.baseController) {
+                const builder = this.surfaceScene ? this.surfaceScene.getBaseBuilder() : null;
+                if (builder) {
+                  this.baseController.setBuilder(builder);
+                  this.baseController.start();
+                } else {
+                  const note = document.getElementById('surface-base-note');
+                  if (note) {
+                    note.textContent = 'Base building is unavailable.';
+                    note.style.display = 'block';
+                  }
+                }
+              } else {
+                const note = document.getElementById('surface-base-note');
+                if (note) {
+                  note.textContent = 'Base building is unavailable.';
+                  note.style.display = 'block';
+                }
+              }
+            });
+          } catch (err) {
+            console.error('EarthScene part failed: base controller', err);
+            this.surfaceHud.onBaseContinue(() => {
+              const note = document.getElementById('surface-base-note');
+              if (note) {
+                note.textContent = 'Base building is unavailable.';
+                note.style.display = 'block';
+              }
+            });
+          }
         }
       }
     } catch (error) {
@@ -397,69 +442,89 @@ export default class EarthScene {
     }
 
     // Dev button in cockpit: return to launch site
-    try {
-      const devBackBtn = document.getElementById('cockpit-dev-back-btn');
-      if (devBackBtn) {
-        devBackBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          /* TEMPORARY: dev button to return to launch site */
-          if (this.surfaceScene) {
-            this.surfaceScene.stop();
-          }
-          if (this.surfaceHud) {
-            this.surfaceHud.hide();
-          }
-          if (typeof window !== 'undefined') {
-            if (window.surfaceScene?.stop) window.surfaceScene.stop();
-            if (window.surfaceHud?.hide) window.surfaceHud.hide();
-          }
-          const surfaceView = document.getElementById('surface-view');
-          if (surfaceView) {
-            surfaceView.classList.add('hidden');
-            surfaceView.style.display = 'none';
-          }
-          const curMission = getMission();
-          if (curMission && curMission.surface) {
-            curMission.surface = {
-              steppedOut: false,
-              sawEarth: false,
-              photoTaken: false,
-              stats: null,
-            };
-            setMission(curMission);
-          }
-
-          if (this.cockpitScene) {
-            this.cockpitScene.stop();
-            if (typeof this.cockpitScene.resetLaunch === 'function') {
-              this.cockpitScene.resetLaunch();
-            }
-          }
+    if (isDev) {
+      try {
+        let devBackBtn = document.getElementById('cockpit-dev-back-btn');
+        if (!devBackBtn) {
           const cockpitView = document.getElementById('cockpit-view');
-          if (cockpitView) cockpitView.classList.add('hidden');
-
-          const appCanvas = document.querySelector('#app canvas');
-          if (appCanvas) appCanvas.style.display = 'block';
-
-          if (typeof window !== 'undefined' && typeof window.resumeEarthScene === 'function') {
-            window.resumeEarthScene();
+          if (cockpitView) {
+            devBackBtn = document.createElement('button');
+            devBackBtn.id = 'cockpit-dev-back-btn';
+            devBackBtn.className = 'cockpit-dev-back-btn';
+            devBackBtn.type = 'button';
+            devBackBtn.title = 'Dev shortcut';
+            devBackBtn.textContent = 'Back to launch site (dev)';
+            cockpitView.appendChild(devBackBtn);
           }
-          this.currentLocation = 'launchSite';
-          setPhase('launchSite');
-          if (this.launchSite && this.camera) {
-            const vp = this.launchSite.viewPoint;
-            this.camera.position.copy(vp.position);
-            this.lookAtPoint(vp.lookAt);
-          }
-          this.updatePrepareButtonVisibility();
-        });
+        }
+        if (devBackBtn) {
+          devBackBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            /* TEMPORARY: dev button to return to launch site */
+            if (this.baseController) {
+              this.baseController.reset();
+            }
+            if (typeof window !== 'undefined' && window.baseController?.reset) {
+              window.baseController.reset();
+            }
+            if (this.surfaceScene) {
+              this.surfaceScene.stop();
+            }
+            if (this.surfaceHud) {
+              this.surfaceHud.hide();
+            }
+            if (typeof window !== 'undefined') {
+              if (window.surfaceScene?.stop) window.surfaceScene.stop();
+              if (window.surfaceHud?.hide) window.surfaceHud.hide();
+            }
+            const surfaceView = document.getElementById('surface-view');
+            if (surfaceView) {
+              surfaceView.classList.add('hidden');
+              surfaceView.style.display = 'none';
+            }
+            const curMission = getMission();
+            if (curMission && curMission.surface) {
+              curMission.surface = {
+                steppedOut: false,
+                sawEarth: false,
+                photoTaken: false,
+                stats: null,
+              };
+              setMission(curMission);
+            }
+
+            if (this.cockpitScene) {
+              this.cockpitScene.stop();
+              if (typeof this.cockpitScene.resetLaunch === 'function') {
+                this.cockpitScene.resetLaunch();
+              }
+            }
+            const cockpitView = document.getElementById('cockpit-view');
+            if (cockpitView) cockpitView.classList.add('hidden');
+
+            const appCanvas = document.querySelector('#app canvas');
+            if (appCanvas) appCanvas.style.display = 'block';
+
+            if (typeof window !== 'undefined' && typeof window.resumeEarthScene === 'function') {
+              window.resumeEarthScene();
+            }
+            this.currentLocation = 'launchSite';
+            setPhase('launchSite');
+            if (this.launchSite && this.camera) {
+              const vp = this.launchSite.viewPoint;
+              this.camera.position.copy(vp.position);
+              this.lookAtPoint(vp.lookAt);
+            }
+            this.updatePrepareButtonVisibility();
+          });
+        }
+      } catch (error) {
+        console.error('EarthScene part failed: cockpitDevBtn', error);
       }
-    } catch (error) {
-      console.error('EarthScene part failed: cockpitDevBtn', error);
     }
 
     /* TEMPORARY: dev jump to surface scene & surface check */
-    if (typeof window !== 'undefined') {
+    if (isDev && typeof window !== 'undefined') {
       window.__devSurface = function(siteId, skipLadder = true) {
         const site = getSite(siteId || 'ridge') || SITES[0];
         const mission = getMission();

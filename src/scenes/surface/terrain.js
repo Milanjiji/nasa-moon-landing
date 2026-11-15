@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { flattenFactor, CLEAR_ZONES } from '../../game/baseLayout.js';
 
 function checkFinite(geometry, name) {
   if (!geometry?.attributes?.position) return;
@@ -55,7 +56,9 @@ export function surfaceHeight(x, z) {
     }
   }
 
-  return blend * (undulation + craterDisp);
+  const rawH = blend * (undulation + craterDisp);
+  const flat = flattenFactor(x, z);
+  return rawH * (1.0 - flat);
 }
 
 function createRegolithTexture(lightHex, darkHex) {
@@ -198,6 +201,16 @@ export function createSurfaceTerrain({ scene, site }) {
       const rz = -Math.cos(angle) * dist;
 
       if (Math.hypot(rx, rz) < 5 || Math.hypot(rx, rz + 3) < 4) continue;
+
+      let inClearZone = false;
+      for (let zIdx = 0; zIdx < CLEAR_ZONES.length; zIdx++) {
+        const cz = CLEAR_ZONES[zIdx];
+        if (Math.hypot(rx - cz.x, rz - cz.z) < cz.r) {
+          inClearZone = true;
+          break;
+        }
+      }
+      if (inClearZone) continue;
 
       const scaleXZ = 0.15 + pseudo() * 1.25;
       const scaleY = scaleXZ * (0.45 + pseudo() * 0.35);
@@ -383,18 +396,18 @@ export function createSurfaceTerrain({ scene, site }) {
     console.error('EarthScene part failed: surface footprints', err);
   }
 
-  function addFootprint(pos, yaw, isLeft) {
+  function addFootprint(pos, angle, isLeft) {
     if (!footprintsMesh) return;
     const dummy = new THREE.Object3D();
     const sideOffset = isLeft ? -0.16 : 0.16;
-    const offX = Math.cos(yaw) * sideOffset;
-    const offZ = Math.sin(yaw) * sideOffset;
+    const offX = Math.cos(angle) * sideOffset;
+    const offZ = -Math.sin(angle) * sideOffset;
     const px = pos.x + offX;
     const pz = pos.z + offZ;
     const py = surfaceHeight(px, pz) + 0.015;
 
     dummy.position.set(px, py, pz);
-    dummy.rotation.y = yaw;
+    dummy.rotation.y = angle;
     dummy.scale.set(1, 1, 1);
     dummy.updateMatrix();
 

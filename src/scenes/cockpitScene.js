@@ -16,6 +16,7 @@ import { createFlightController } from '../cockpit/flightController.js';
 import { createLandingController } from '../cockpit/landingController.js';
 import { createFloaters } from '../cockpit/floaters.js';
 import { playStepOut } from '../cockpit/stepOut.js';
+import { isDev } from '../dev/devFlag.js';
 
 export { surfaceY };
 
@@ -358,9 +359,11 @@ export function createCockpitScene(containerElement) {
 
     if (!hasScreenFitChecked) {
       hasScreenFitChecked = true;
-      setTimeout(() => {
-        try { if (typeof window !== 'undefined' && typeof window.__screenFitCheck === 'function') window.__screenFitCheck(); } catch (err) { console.error('Screen fit check failed:', err); }
-      }, 3000);
+      if (isDev) {
+        setTimeout(() => {
+          try { if (typeof window !== 'undefined' && typeof window.__screenFitCheck === 'function') window.__screenFitCheck(); } catch (err) { console.error('Screen fit check failed:', err); }
+        }, 3000);
+      }
     }
   }
 
@@ -373,7 +376,7 @@ export function createCockpitScene(containerElement) {
     if (landingControllerInstance) landingControllerInstance.abort();
   }
 
-  if (typeof window !== 'undefined') {
+  if (isDev && typeof window !== 'undefined') {
     window.__arrivalPreview = () => {
       setOutsideView(ARRIVAL_VIEW);
       return computeArrivalCheck({ camera, viewParams: outsideView, screenBoxes: [] });
@@ -426,6 +429,18 @@ export function createCockpitScene(containerElement) {
     getLandingController: () => landingControllerInstance,
     startFlight: () => { if (flightControllerInstance) flightControllerInstance.start(); },
     startLanding: () => { if (landingControllerInstance) landingControllerInstance.start(); },
+    skipToOrbit: (fuelMargin) => {
+      setOutsideView(DEFAULT_VIEW);
+      if (launchControllerInstance && launchControllerInstance.skipToOrbit) {
+        launchControllerInstance.skipToOrbit(fuelMargin);
+      }
+      if (floatersInstance) floatersInstance.update(0.1, { stage: 'orbit', g: 0 });
+    },
+    jumpToStorm: () => { if (flightControllerInstance?.jumpToStorm) flightControllerInstance.jumpToStorm(); },
+    jumpToStormResult: (p) => { if (flightControllerInstance?.jumpToStormResult) flightControllerInstance.jumpToStormResult(p); },
+    jumpToLunarOrbit: (siteId) => { if (flightControllerInstance?.jumpToLunarOrbit) flightControllerInstance.jumpToLunarOrbit(siteId); },
+    jumpToDecision: () => { if (landingControllerInstance?.jumpToDecision) landingControllerInstance.jumpToDecision(); },
+    jumpToTouchdown: (p) => { if (landingControllerInstance?.jumpToTouchdown) landingControllerInstance.jumpToTouchdown(p); },
     resetLaunch: () => {
       [launchControllerInstance, flightControllerInstance, landingControllerInstance, floatersInstance].forEach((inst) => { if (inst) inst.reset(); });
       setOutsideView(DEFAULT_VIEW);

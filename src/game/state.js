@@ -40,6 +40,14 @@ const state = {
       photoTaken: false,
       stats: null,
     },
+    base: {
+      started: false,
+      built: false,
+      choices: { solar: null, habitat: null, air: null, shield: null },
+      meters: null,
+      setupHours: 0,
+      fatiguePenalty: 0,
+    },
   },
 };
 
@@ -98,6 +106,18 @@ export function setMission(partial) {
     state.mission = {
       ...state.mission,
       ...partial,
+      surface: partial.surface
+        ? { ...state.mission.surface, ...partial.surface }
+        : state.mission.surface,
+      base: partial.base
+        ? {
+            ...state.mission.base,
+            ...partial.base,
+            choices: partial.base.choices
+              ? { ...state.mission.base?.choices, ...partial.base.choices }
+              : state.mission.base?.choices,
+          }
+        : state.mission.base,
     };
   }
 }
@@ -127,6 +147,14 @@ export function resetMission() {
       sawEarth: false,
       photoTaken: false,
       stats: null,
+    },
+    base: {
+      started: false,
+      built: false,
+      choices: { solar: null, habitat: null, air: null, shield: null },
+      meters: null,
+      setupHours: 0,
+      fatiguePenalty: 0,
     },
   };
 }

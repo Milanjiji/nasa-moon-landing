@@ -278,6 +278,11 @@ export function createCharacterPopup() {
     boardButtonOk,
     isBoarding: () => isBoarding,
     getLoadout,
+    setSelection: (sel) => {
+      if (gearPanel && typeof gearPanel.setSelection === 'function') {
+        gearPanel.setSelection(sel);
+      }
+    },
     onLoadoutChange: (cb) => { if (typeof cb === 'function') loadoutCallbacks.push(cb); },
     onBackToLaunchSite: (cb) => { onBackToSiteCallback = cb; },
   };

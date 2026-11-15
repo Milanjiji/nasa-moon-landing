@@ -12,6 +12,9 @@ import { summarizeLoadout } from '../game/loadoutSummary.js';
 import { setPhase, setMission, getMission } from '../game/state.js';
 import { createStormPanel } from '../ui/stormPanel.js';
 import { createSitePanel } from '../ui/sitePanel.js';
+import { getSite } from '../data/sites.js';
+import { LUNAR_ORBIT_VIEW } from '../game/outsideViews.js';
+import { isDev } from '../dev/devFlag.js';
 
 export function createFlightController({
   screens,
@@ -352,6 +355,73 @@ export function createFlightController({
     }
   }
 
+  function jumpToStorm() {
+    running = true;
+    tf = FLIGHT.stormAlert;
+    phase = 'stormWait';
+    stormLogged = true;
+    const mission = getMission();
+    const loadout = typeof getLoadout === 'function' ? getLoadout() : null;
+    const summary = summarizeLoadout(loadout ? loadout.totals : null);
+    const frame = getFlightFrame(tf, mission);
+    const stormFrame = getStormFrame(1.0, null);
+    if (setOutsideView && frame.view) setOutsideView(frame.view);
+    if (effects) { effects.setStormAlert(true); effects.update(0.016, frame, stormFrame); }
+    if (screens) {
+      screens.setFlightFrame({ frame, mission, isStorm: true, stormFrame, isLunarOrbit: false, selectedSite: null });
+      screens.setLogLine('EMERGENCY: Coronal mass ejection detected!');
+      screens.setLogLine('Awaiting defense protocol selection...');
+    }
+    if (stormPanel) stormPanel.showDecision(summary, handleStormChoice);
+  }
+
+  function jumpToStormResult(stormPreset) {
+    running = true;
+    tf = FLIGHT.stormAlert + FLIGHT.stormDuration;
+    phase = 'stormResult';
+    stormLogged = true;
+    const p = stormPreset || { choice: 'shelter', dose: 10, level: 'none', healthPenalty: 0, fuelCost: 4 };
+    stormOutcome = { choice: p.choice, dose: p.dose, level: p.level, healthPenalty: p.healthPenalty, fuelCost: p.fuelCost };
+    const mission = getMission();
+    mission.stormChoice = p.choice;
+    mission.stormDose = p.dose;
+    mission.stormLevel = p.level;
+    mission.healthPenalty = (mission.healthPenalty || 0) + p.healthPenalty;
+    if (typeof mission.fuelMargin === 'number') mission.fuelMargin = Math.max(0, mission.fuelMargin - p.fuelCost);
+    setMission(mission);
+    const frame = getFlightFrame(tf, mission);
+    if (setOutsideView && frame.view) setOutsideView(frame.view);
+    if (effects) { effects.setStormAlert(false); effects.update(0.016, frame, null); }
+    if (screens) {
+      screens.setFlightFrame({ frame, mission, isStorm: false, stormFrame: null, isLunarOrbit: false, selectedSite: null });
+      screens.setLogLine(`Protocol engaged: ${p.choice === 'orient' ? 'Orienting heat shield' : 'Cabin shelter'}`);
+      screens.setLogLine(`Radiation dose absorbed: ${p.dose} mSv`);
+    }
+    if (stormPanel) stormPanel.showResult(stormOutcome);
+  }
+
+  function jumpToLunarOrbit(siteId) {
+    running = false;
+    tf = FLIGHT.duration;
+    phase = 'siteSelect';
+    setPhase('lunarOrbit');
+    const mission = getMission();
+    mission.lunarOrbitReached = true;
+    if (siteId) mission.landingSite = siteId;
+    setMission(mission);
+    if (setOutsideView) setOutsideView(LUNAR_ORBIT_VIEW);
+    const frame = getFlightFrame(tf, mission);
+    if (screens) {
+      screens.setFlightFrame({ frame, mission, isStorm: false, stormFrame: null, isLunarOrbit: true, selectedSite: siteId ? getSite(siteId) : null });
+      screens.setLogLine('Low lunar orbit achieved (100 km altitude).');
+      screens.setLogLine('Select landing coordinates to proceed.');
+    }
+    if (sitePanel) {
+      if (siteId && typeof sitePanel.setSelectedSiteId === 'function') sitePanel.setSelectedSiteId(siteId);
+      sitePanel.show(handleSiteSelection);
+    }
+  }
+
   function dispose() {
     reset();
     if (typeof document !== 'undefined') {
@@ -367,6 +437,9 @@ export function createFlightController({
     abort,
     update,
     skipTo,
+    jumpToStorm,
+    jumpToStormResult,
+    jumpToLunarOrbit,
     isRunning: () => running,
     getPhase: () => phase,
     onLandPressed: (cb) => {
