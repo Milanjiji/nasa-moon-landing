@@ -64,8 +64,8 @@ export function buildDashboard(scene, camera, updateFns) {
 
   // 2) Screens
   const screenConfigs = [
-    { id: 'main', title: 'Mission overview', pos: [-0.58, 0.82, -1.05], size: [0.88, 0.46] },
-    { id: 'left', title: 'Life support', pos: [-1.42, 0.92, -1.25], size: [0.55, 0.38] },
+    { id: 'main', title: 'Mission overview', pos: [-0.58, 0.82, -1.05], size: [0.88, 0.50] },
+    { id: 'left', title: 'Life support', pos: [-1.30, 0.92, -1.25], size: [0.55, 0.38] },
     { id: 'right', title: 'Route', pos: [0.32, 0.92, -1.25], size: [0.55, 0.38] },
     { id: 'co', title: 'Mission log', pos: [1.05, 0.92, -1.15], size: [0.72, 0.44] },
     { id: 'top', title: 'Mission clock', pos: [0.00, 1.20, -1.74], size: [1.08, 0.16] },

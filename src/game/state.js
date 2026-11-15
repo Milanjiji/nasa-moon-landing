@@ -16,6 +16,11 @@ export const PHASES = [
 const state = {
   phase: 'earth',
   loadout: null,
+  mission: {
+    fuelMargin: null,
+    launchedAt: null,
+    orbitReached: false,
+  },
 };
 
 const phaseListeners = new Set();
@@ -24,6 +29,7 @@ export function getState() {
   return {
     phase: state.phase,
     loadout: state.loadout ? { ...state.loadout } : null,
+    mission: { ...state.mission },
   };
 }
 
@@ -67,7 +73,29 @@ export function onPhaseChange(callback) {
   return () => {};
 }
 
+export function setMission(partial) {
+  if (partial && typeof partial === 'object') {
+    state.mission = {
+      ...state.mission,
+      ...partial,
+    };
+  }
+}
+
+export function getMission() {
+  return { ...state.mission };
+}
+
+export function resetMission() {
+  state.mission = {
+    fuelMargin: null,
+    launchedAt: null,
+    orbitReached: false,
+  };
+}
+
 export function resetGame() {
   state.loadout = null;
+  resetMission();
   setPhase('earth');
 }

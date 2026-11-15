@@ -140,6 +140,7 @@ export default class EarthScene {
       dashboard: false,
       screens: false,
       interaction: false,
+      launch: false,
     };
 
     // ---- Renderer and camera (essential) ----
@@ -348,6 +349,9 @@ export default class EarthScene {
           if (this.cockpitScene.interactionOk) {
             this.setupStatus.interaction = true;
           }
+          if (this.cockpitScene.launchOk) {
+            this.setupStatus.launch = true;
+          }
           if (typeof window !== 'undefined') {
             window.cockpitScene = this.cockpitScene;
           }
@@ -366,6 +370,9 @@ export default class EarthScene {
           /* TEMPORARY: dev button to return to launch site */
           if (this.cockpitScene) {
             this.cockpitScene.stop();
+            if (typeof this.cockpitScene.resetLaunch === 'function') {
+              this.cockpitScene.resetLaunch();
+            }
           }
           const cockpitView = document.getElementById('cockpit-view');
           if (cockpitView) cockpitView.classList.add('hidden');
@@ -414,9 +421,10 @@ export default class EarthScene {
       const dashboardStatus = this.setupStatus.dashboard ? 'ok' : 'FAILED';
       const screensStatus = this.setupStatus.screens ? 'ok' : 'FAILED';
       const interactionStatus = this.setupStatus.interaction ? 'ok' : 'FAILED';
+      const launchStatus = this.setupStatus.launch ? 'ok' : 'FAILED';
       const currentPhase = getPhase();
 
-      const statusMessage = `EarthScene ready: sky=${skyStatus} moon=${moonStatus} stars=${starsStatus} ground=${groundStatus} ridges=${ridgesStatus} launchSite=${launchSiteStatus} trees=${treesStatus} (${treeCount} trees) drag=${dragStatus} padCenter=${padCenterStatus} prepare=${prepareStatus} popup=${popupStatus} gear=${gearStatus} board=${boardStatus} cockpit=${cockpitStatus} dashboard=${dashboardStatus} screens=${screensStatus} interaction=${interactionStatus} phase=${currentPhase}`;
+      const statusMessage = `EarthScene ready: sky=${skyStatus} moon=${moonStatus} stars=${starsStatus} ground=${groundStatus} ridges=${ridgesStatus} launchSite=${launchSiteStatus} trees=${treesStatus} (${treeCount} trees) drag=${dragStatus} padCenter=${padCenterStatus} prepare=${prepareStatus} popup=${popupStatus} gear=${gearStatus} board=${boardStatus} cockpit=${cockpitStatus} dashboard=${dashboardStatus} screens=${screensStatus} interaction=${interactionStatus} launch=${launchStatus} phase=${currentPhase}`;
       console.log(statusMessage);
     } catch (error) {
       console.error('EarthScene part failed: status', error);
