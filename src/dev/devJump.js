@@ -20,10 +20,12 @@ import { computeBase } from '../game/baseSetup.js';
 import { CAMERA_POSES } from '../game/baseLayout.js';
 import { computeBaseCheck } from './baseChecks.js';
 import { computeWalkCheck } from './walkCheck.js';
+import { computeEarthNavCheck } from './earthNavCheck.js';
 
 if (typeof window !== 'undefined') {
   window.__baseCheck = computeBaseCheck;
   window.__walkCheck = computeWalkCheck;
+  window.__earthNavCheck = computeEarthNavCheck;
 }
 
 const jumps = new Map();

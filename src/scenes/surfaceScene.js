@@ -8,6 +8,7 @@ import { getMission, setMission } from '../game/state.js';
 import { isDev } from '../dev/devFlag.js';
 import { createBaseBuilder } from './surface/baseBuilder.js';
 import { getWalkVectors, moveStep } from '../game/walkMath.js';
+import { validateInstancedMeshes } from '../game/earthNav.js';
 
 export function createSurfaceScene(containerElement) {
   if (!containerElement) throw new Error('Container required for surface scene');
@@ -408,6 +409,7 @@ export function createSurfaceScene(containerElement) {
     animId = requestAnimationFrame(animate);
 
     if (isDev) {
+      validateInstancedMeshes(scene);
       if (autoCheckTimer) clearTimeout(autoCheckTimer);
       autoCheckTimer = setTimeout(() => {
         try {

@@ -12,6 +12,9 @@ import { getMission, setMission, getLoadout } from '../game/state.js';
 import { getSite, SITES } from '../data/sites.js';
 import { getSurfaceStart } from '../game/surfaceStats.js';
 import { isDev } from '../dev/devFlag.js';
+import { getWalkVectors, moveStep } from '../game/walkMath.js';
+import { easeInOut, lerpAngle, clampWalk, nearPad, validateInstancedMeshes } from '../game/earthNav.js';
+import { createEarthHud } from '../ui/earthHud.js';
 
 const STAR_COUNT = 3500;
 const MOON_ROTATION_SPEED = 0.025;
@@ -270,6 +273,25 @@ export default class EarthScene {
     this.isDragging = false;
     this.pointer = { x: 0, y: 0 };
 
+    this.heldKeys = {};
+    this.walkEase = 0;
+    this.walkTime = 0;
+    this.wasNearPad = false;
+    this.isTraveling = false;
+    this.travelElapsed = 0;
+    this.travelDuration = 4.5;
+    this.travelStartPos = null;
+    this.travelTargetPos = null;
+    this.travelStartYaw = 0;
+    this.travelTargetYaw = 0;
+    this.travelStartPitch = 0;
+    this.travelTargetPitch = 0;
+    this.travelReducedMotion = false;
+    this.tmpCamDir = new THREE.Vector3();
+    this.lastWalkVecs = null;
+    this.treePositions = null;
+    this.earthHud = null;
+
     // ---- Drag controls ----
     try {
       this.addInputHandlers();
@@ -284,36 +306,67 @@ export default class EarthScene {
     this.originalYaw = this.yaw;
     this.originalPitch = this.pitch;
 
-    // ---- Dev keys: R = launch pad, E = back to start ----
-    if (isDev) {
-      try {
-        const padKeyHandler = (e) => {
-          // Ignore when settings panel or character popup is open, or during cockpit phase.
-          const panel = document.getElementById('settings-panel');
-          if (panel && panel.classList.contains('open')) return;
-          if (getPhase() === 'cockpit' || (this.characterPopup && this.characterPopup.isOpen())) return;
-          if (!this.launchSite) return;
+    // ---- R key handler (production travel, dev instant jump) ----
+    try {
+      const rKeyHandler = (e) => {
+        const panel = document.getElementById('settings-panel');
+        if (panel && panel.classList.contains('open')) return;
+        if (getPhase() !== 'earth' && getPhase() !== 'launchSite') return;
+        if (this.characterPopup && this.characterPopup.isOpen()) return;
+        if (this.characterPopup && this.characterPopup.isBoarding()) return;
+        if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.isContentEditable)) return;
+        if (!this.launchSite) return;
 
-          if (e.key === 'r' || e.key === 'R') {
+        if (e.key === 'r' || e.key === 'R') {
+          if (this.currentLocation === 'launchSite') return;
+          if (isDev) {
             const vp = this.launchSite.viewPoint;
             this.camera.position.copy(vp.position);
             this.lookAtPoint(vp.lookAt);
-            this.setLocation('launchSite');
-          } else if (e.key === 'e' || e.key === 'E') {
+            this.setLocation('launchSite', { moveCamera: true });
+          } else {
+            this.travelToLaunchSite();
+          }
+        }
+      };
+      window.addEventListener('keydown', rKeyHandler);
+    } catch (error) {
+      console.error('EarthScene part failed: rKey', error);
+    }
+
+    // ---- Dev keys: E = back to start ----
+    if (isDev) {
+      try {
+        const devKeyHandler = (e) => {
+          const panel = document.getElementById('settings-panel');
+          if (panel && panel.classList.contains('open')) return;
+          if (getPhase() !== 'earth' && getPhase() !== 'launchSite') return;
+          if (this.characterPopup && this.characterPopup.isOpen()) return;
+          if (!this.launchSite) return;
+
+          if (e.key === 'e' || e.key === 'E') {
             this.camera.position.copy(this.originalPosition);
             this.yaw = this.originalYaw;
             this.pitch = this.originalPitch;
             this.camera.rotation.order = 'YXZ';
             this.camera.rotation.y = this.yaw;
             this.camera.rotation.x = this.pitch;
-            this.setLocation('start');
+            this.setLocation('start', { moveCamera: false });
           }
         };
-        window.addEventListener('keydown', padKeyHandler);
+        window.addEventListener('keydown', devKeyHandler);
         console.log('Dev keys: R = launch pad, E = back to start');
       } catch (error) {
         console.error('EarthScene part failed: devKeys', error);
       }
+    }
+
+    // ---- Earth HUD (hint card, pointer, caption, announcer) ----
+    try {
+      this.initEarthHud();
+      this.setupStatus.earthHud = true;
+    } catch (error) {
+      console.error('EarthScene part failed: earthNavHud', error);
     }
 
     // ---- Prepare button ----
@@ -1029,6 +1082,7 @@ export default class EarthScene {
     this.pineTrees = new THREE.InstancedMesh(pineGeo, pineMat, TREE_PINE_COUNT);
     this.pineTrees.name = 'pine-trees';
     this.pineTrees.frustumCulled = false;
+    this.pineTrees.count = 0;
     this.roundTrees = new THREE.InstancedMesh(
       roundGeo,
       roundMat,
@@ -1036,6 +1090,7 @@ export default class EarthScene {
     );
     this.roundTrees.name = 'round-trees';
     this.roundTrees.frustumCulled = false;
+    this.roundTrees.count = 0;
 
     const dummy = new THREE.Object3D();
     const placed = [];
@@ -1142,8 +1197,13 @@ export default class EarthScene {
       roundPlaced += 1;
     }
 
+    this.treePositions = placed;
     this.pineTrees.instanceMatrix.needsUpdate = true;
     this.roundTrees.instanceMatrix.needsUpdate = true;
+
+    if (isDev) {
+      validateInstancedMeshes(this.scene);
+    }
 
     console.log(
       `[Trees] pine: placed ${pinePlaced}/${TREE_PINE_COUNT} trees. ` +
@@ -1160,10 +1220,11 @@ export default class EarthScene {
   addInputHandlers() {
     const onPointerDown = (e) => {
       if (e.button !== 0) return;
+      if (this.isTraveling) return;
       if (getPhase() === 'cockpit' || (this.characterPopup && this.characterPopup.isOpen())) return;
       if (
         e.target.closest(
-          '#start-overlay, #start-btn, #settings-panel, #settings-btn, #prepare-container, #prepare-btn, #character-popup, #cockpit-placeholder, #board-transition-overlay'
+          '#start-overlay, #start-btn, #settings-panel, #settings-btn, #prepare-container, #prepare-btn, #character-popup, #cockpit-placeholder, #board-transition-overlay, #launch-hint, #launch-hint-btn, #launch-pointer'
         )
       ) {
         return;
@@ -1174,7 +1235,7 @@ export default class EarthScene {
     };
 
     const onPointerMove = (e) => {
-      if (!this.isDragging) return;
+      if (!this.isDragging || this.isTraveling) return;
       const dx = e.clientX - this.pointer.x;
       const dy = e.clientY - this.pointer.y;
       const hMult = this.settings.invertH ? -1 : 1;
@@ -1192,10 +1253,54 @@ export default class EarthScene {
       this.isDragging = false;
     };
 
+    const onKeyDown = (e) => {
+      if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.isContentEditable)) {
+        return;
+      }
+      if (!this.isWalkingAllowed()) {
+        this.heldKeys = {};
+        return;
+      }
+      if (e.code === 'KeyW' || e.key === 'w' || e.key === 'W' || e.code === 'ArrowUp' || e.key === 'ArrowUp') {
+        this.heldKeys.forward = 1;
+      } else if (e.code === 'KeyS' || e.key === 's' || e.key === 'S' || e.code === 'ArrowDown' || e.key === 'ArrowDown') {
+        this.heldKeys.backward = 1;
+      } else if (e.code === 'KeyA' || e.key === 'a' || e.key === 'A' || e.code === 'ArrowLeft' || e.key === 'ArrowLeft') {
+        this.heldKeys.left = 1;
+      } else if (e.code === 'KeyD' || e.key === 'd' || e.key === 'D' || e.code === 'ArrowRight' || e.key === 'ArrowRight') {
+        this.heldKeys.right = 1;
+      }
+    };
+
+    const onKeyUp = (e) => {
+      if (e.code === 'KeyW' || e.key === 'w' || e.key === 'W' || e.code === 'ArrowUp' || e.key === 'ArrowUp') {
+        delete this.heldKeys.forward;
+      } else if (e.code === 'KeyS' || e.key === 's' || e.key === 'S' || e.code === 'ArrowDown' || e.key === 'ArrowDown') {
+        delete this.heldKeys.backward;
+      } else if (e.code === 'KeyA' || e.key === 'a' || e.key === 'A' || e.code === 'ArrowLeft' || e.key === 'ArrowLeft') {
+        delete this.heldKeys.left;
+      } else if (e.code === 'KeyD' || e.key === 'd' || e.key === 'D' || e.code === 'ArrowRight' || e.key === 'ArrowRight') {
+        delete this.heldKeys.right;
+      }
+    };
+
+    const clearKeys = () => {
+      this.heldKeys = {};
+      this.walkEase = 0;
+    };
+
     this.container.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
     window.addEventListener('pointercancel', onPointerUp);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', clearKeys);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        clearKeys();
+      }
+    });
   }
 
   addResizeHandler() {
@@ -1209,6 +1314,70 @@ export default class EarthScene {
     window.addEventListener('resize', onResize);
   }
 
+  initEarthHud() {
+    this.earthHud = createEarthHud({
+      onTravel: () => {
+        this.travelToLaunchSite();
+      },
+      getCamera: () => this.camera,
+      getPadCenter: () => launchPadCenter,
+      isLocationStart: () => this.currentLocation === 'start',
+      isPhaseEarth: () => getPhase() === 'earth',
+    });
+  }
+
+  isWalkingAllowed() {
+    if (this.currentLocation !== 'start' && this.currentLocation !== 'launchSite') return false;
+    if (getPhase() !== 'earth' && getPhase() !== 'launchSite') return false;
+    if (this.isTraveling) return false;
+    if (this.characterPopup && this.characterPopup.isOpen()) return false;
+    if (this.characterPopup && this.characterPopup.isBoarding()) return false;
+    const panel = document.getElementById('settings-panel');
+    if (panel && panel.classList.contains('open')) return false;
+    if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.isContentEditable)) return false;
+    return true;
+  }
+
+  travelToLaunchSite() {
+    if (this.currentLocation !== 'start') return;
+    if (getPhase() !== 'earth') return;
+    if (this.characterPopup && this.characterPopup.isOpen()) return;
+    if (this.characterPopup && this.characterPopup.isBoarding()) return;
+    if (this.isTraveling) return;
+    if (!this.launchSite || !this.launchSite.viewPoint) return;
+
+    const vp = this.launchSite.viewPoint;
+    const startPos = this.camera.position.clone();
+    const startYaw = this.yaw;
+    const startPitch = this.pitch;
+
+    const dir = new THREE.Vector3().subVectors(vp.lookAt, vp.position);
+    const targetYaw = Math.atan2(-dir.x, -dir.z);
+    const rawPitch = Math.atan2(dir.y, Math.hypot(dir.x, dir.z));
+    const targetPitch = Math.max(PITCH_MIN, Math.min(PITCH_MAX, rawPitch));
+
+    const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const duration = prefersReducedMotion ? 0.3 : 4.5;
+
+    this.isTraveling = true;
+    this.travelElapsed = 0;
+    this.travelDuration = duration;
+    this.travelStartPos = startPos;
+    this.travelTargetPos = vp.position.clone();
+    this.travelStartYaw = startYaw;
+    this.travelTargetYaw = targetYaw;
+    this.travelStartPitch = startPitch;
+    this.travelTargetPitch = targetPitch;
+    this.travelReducedMotion = prefersReducedMotion;
+
+    this.heldKeys = {};
+    this.walkEase = 0;
+
+    if (this.earthHud) {
+      this.earthHud.onTravelStart();
+    }
+  }
+
   update(delta) {
     this.moon.rotation.y += delta * MOON_ROTATION_SPEED;
     this.uTime += delta;
@@ -1217,6 +1386,125 @@ export default class EarthScene {
     }
     if (this.launchSite) {
       this.launchSite.update(delta);
+    }
+
+    if (this.earthHud && this.isOverlayGone() && this.currentLocation === 'start' && getPhase() === 'earth') {
+      this.earthHud.showHintCard();
+    }
+
+    // 1. Travel animation
+    if (this.isTraveling) {
+      if (document.hidden) {
+        return;
+      }
+      if (this.characterPopup && this.characterPopup.isOpen()) {
+        this.isTraveling = false;
+        return;
+      }
+
+      const clampedDelta = Math.min(delta, 0.1);
+      this.travelElapsed += clampedDelta;
+      const t = Math.min(1, this.travelElapsed / this.travelDuration);
+      const ease = easeInOut(t);
+
+      const curX = this.travelStartPos.x + (this.travelTargetPos.x - this.travelStartPos.x) * ease;
+      const curZ = this.travelStartPos.z + (this.travelTargetPos.z - this.travelStartPos.z) * ease;
+      const baseY = terrainHeight(curX, curZ) + 1.7;
+
+      let bob = 0;
+      if (!this.travelReducedMotion) {
+        bob = Math.sin(this.travelElapsed * Math.PI * 2 * 2.0) * 0.04;
+      }
+
+      this.camera.position.set(curX, baseY + bob, curZ);
+
+      this.yaw = lerpAngle(this.travelStartYaw, this.travelTargetYaw, ease);
+      this.pitch = this.travelStartPitch + (this.travelTargetPitch - this.travelStartPitch) * ease;
+      this.camera.rotation.order = 'YXZ';
+      this.camera.rotation.y = this.yaw;
+      this.camera.rotation.x = this.pitch;
+
+      if (t >= 1) {
+        this.isTraveling = false;
+        this.setLocation('launchSite', { moveCamera: true });
+        if (this.earthHud) {
+          this.earthHud.showCaption('You are at the launch site. Press Prepare to choose your gear.');
+        }
+      }
+      return;
+    }
+
+    // 2. Walking on Earth
+    if (!this.isWalkingAllowed()) {
+      this.heldKeys = {};
+      this.walkEase = 0;
+    } else {
+      const fwdInput = (this.heldKeys.forward ? 1 : 0) - (this.heldKeys.backward ? 1 : 0);
+      const strInput = (this.heldKeys.right ? 1 : 0) - (this.heldKeys.left ? 1 : 0);
+      const isMoving = fwdInput !== 0 || strInput !== 0;
+      const targetEase = isMoving ? 1 : 0;
+      this.walkEase += (targetEase - this.walkEase) * Math.min(1, delta * 12);
+
+      if (this.walkEase > 0.001) {
+        this.camera.getWorldDirection(this.tmpCamDir);
+        const walkVecs = getWalkVectors(this.tmpCamDir.x, this.tmpCamDir.z, this.lastWalkVecs);
+        this.lastWalkVecs = walkVecs;
+
+        const rawStep = moveStep({ forward: fwdInput, strafe: strInput }, walkVecs, 4.5, delta);
+
+        let speedMult = 1.0;
+        if (this.treePositions && this.treePositions.length > 0) {
+          const nextX = this.camera.position.x + rawStep.dx * this.walkEase;
+          const nextZ = this.camera.position.z + rawStep.dz * this.walkEase;
+          for (let i = 0; i < this.treePositions.length; i++) {
+            const tp = this.treePositions[i];
+            const dX = nextX - tp.x;
+            const dZ = nextZ - tp.z;
+            if (dX * dX + dZ * dZ < 0.8 * 0.8) {
+              speedMult = 0.4;
+              break;
+            }
+          }
+        }
+
+        const stepX = rawStep.dx * this.walkEase * speedMult;
+        const stepZ = rawStep.dz * this.walkEase * speedMult;
+        const newPos = clampWalk(this.camera.position.x + stepX, this.camera.position.z + stepZ, 0, 0, 135);
+        const baseY = terrainHeight(newPos.x, newPos.z) + 1.7;
+
+        let bob = 0;
+        const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (!prefersReducedMotion && this.walkEase > 0.05) {
+          this.walkTime = (this.walkTime || 0) + delta * this.walkEase * (speedMult >= 1 ? 1 : 0.6);
+          bob = Math.sin(this.walkTime * Math.PI * 2 * 2.0) * 0.04 * this.walkEase;
+        }
+
+        this.camera.position.set(newPos.x, baseY + bob, newPos.z);
+
+        if (launchPadCenter) {
+          const isNear = nearPad(newPos.x, newPos.z, launchPadCenter.x, launchPadCenter.z, this.wasNearPad);
+          if (isNear !== this.wasNearPad) {
+            this.wasNearPad = isNear;
+            if (isNear) {
+              if (this.currentLocation !== 'launchSite') {
+                this.setLocation('launchSite', { moveCamera: false });
+              }
+              if (this.earthHud) {
+                this.earthHud.hideHintCard();
+              }
+            } else {
+              if (this.currentLocation !== 'start') {
+                this.setLocation('start', { moveCamera: false });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Pointer indicator update
+    if (this.earthHud && this.camera && launchPadCenter) {
+      this.earthHud.update(this.camera, launchPadCenter);
     }
   }
 
@@ -1231,22 +1519,26 @@ export default class EarthScene {
     this.camera.rotation.x = this.pitch;
   }
 
-  setLocation(name) {
+  setLocation(name, options = { moveCamera: true }) {
     if (name !== 'start' && name !== 'launchSite') return;
+    const shouldMoveCamera = options && options.moveCamera !== false;
     this.currentLocation = name;
     if (name === 'launchSite') {
       setPhase('launchSite');
       if (this.prepareBtn) {
         this.prepareBtn.classList.remove('fade-out');
       }
-      if (this.launchSite && this.camera) {
+      if (shouldMoveCamera && this.launchSite && this.camera) {
         const vp = this.launchSite.viewPoint;
         this.camera.position.copy(vp.position);
         this.lookAtPoint(vp.lookAt);
       }
+      if (this.earthHud) {
+        this.earthHud.hideHintCard();
+      }
     } else if (name === 'start') {
       setPhase('earth');
-      if (this.camera && this.originalPosition) {
+      if (shouldMoveCamera && this.camera && this.originalPosition) {
         this.camera.position.copy(this.originalPosition);
         this.yaw = this.originalYaw;
         this.pitch = this.originalPitch;
