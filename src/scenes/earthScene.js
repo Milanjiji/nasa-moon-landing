@@ -141,6 +141,8 @@ export default class EarthScene {
       screens: false,
       interaction: false,
       launch: false,
+      flight: false,
+      landing: false,
     };
 
     // ---- Renderer and camera (essential) ----
@@ -352,6 +354,12 @@ export default class EarthScene {
           if (this.cockpitScene.launchOk) {
             this.setupStatus.launch = true;
           }
+          if (this.cockpitScene.flightOk) {
+            this.setupStatus.flight = true;
+          }
+          if (this.cockpitScene.landingOk) {
+            this.setupStatus.landing = true;
+          }
           if (typeof window !== 'undefined') {
             window.cockpitScene = this.cockpitScene;
           }
@@ -422,9 +430,11 @@ export default class EarthScene {
       const screensStatus = this.setupStatus.screens ? 'ok' : 'FAILED';
       const interactionStatus = this.setupStatus.interaction ? 'ok' : 'FAILED';
       const launchStatus = this.setupStatus.launch ? 'ok' : 'FAILED';
+      const flightStatus = this.setupStatus.flight ? 'ok' : 'FAILED';
+      const landingStatus = this.setupStatus.landing ? 'ok' : 'FAILED';
       const currentPhase = getPhase();
 
-      const statusMessage = `EarthScene ready: sky=${skyStatus} moon=${moonStatus} stars=${starsStatus} ground=${groundStatus} ridges=${ridgesStatus} launchSite=${launchSiteStatus} trees=${treesStatus} (${treeCount} trees) drag=${dragStatus} padCenter=${padCenterStatus} prepare=${prepareStatus} popup=${popupStatus} gear=${gearStatus} board=${boardStatus} cockpit=${cockpitStatus} dashboard=${dashboardStatus} screens=${screensStatus} interaction=${interactionStatus} launch=${launchStatus} phase=${currentPhase}`;
+      const statusMessage = `EarthScene ready: sky=${skyStatus} moon=${moonStatus} stars=${starsStatus} ground=${groundStatus} ridges=${ridgesStatus} launchSite=${launchSiteStatus} trees=${treesStatus} (${treeCount} trees) drag=${dragStatus} padCenter=${padCenterStatus} prepare=${prepareStatus} popup=${popupStatus} gear=${gearStatus} board=${boardStatus} cockpit=${cockpitStatus} dashboard=${dashboardStatus} screens=${screensStatus} interaction=${interactionStatus} launch=${launchStatus} flight=${flightStatus} landing=${landingStatus} phase=${currentPhase}`;
       console.log(statusMessage);
     } catch (error) {
       console.error('EarthScene part failed: status', error);

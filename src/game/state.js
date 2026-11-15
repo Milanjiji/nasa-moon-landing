@@ -7,7 +7,9 @@ export const PHASES = [
   'launchSite',
   'cockpit',
   'launch',
+  'flight',
   'storm',
+  'lunarOrbit',
   'landing',
   'base',
   'ending',
@@ -20,6 +22,17 @@ const state = {
     fuelMargin: null,
     launchedAt: null,
     orbitReached: false,
+    stormChoice: null,
+    stormDose: null,
+    stormLevel: null,
+    healthPenalty: 0,
+    landingSite: null,
+    lunarOrbitReached: false,
+    landingChoice: null,
+    landingRisk: null,
+    landingLevel: null,
+    damage: 'none',
+    landed: false,
   },
 };
 
@@ -91,6 +104,17 @@ export function resetMission() {
     fuelMargin: null,
     launchedAt: null,
     orbitReached: false,
+    stormChoice: null,
+    stormDose: null,
+    stormLevel: null,
+    healthPenalty: 0,
+    landingSite: null,
+    lunarOrbitReached: false,
+    landingChoice: null,
+    landingRisk: null,
+    landingLevel: null,
+    damage: 'none',
+    landed: false,
   };
 }
 
@@ -99,3 +123,17 @@ export function resetGame() {
   resetMission();
   setPhase('earth');
 }
+
+export default {
+  PHASES,
+  getState,
+  getPhase,
+  setPhase,
+  setLoadout,
+  getLoadout,
+  onPhaseChange,
+  setMission,
+  getMission,
+  resetMission,
+  resetGame,
+};

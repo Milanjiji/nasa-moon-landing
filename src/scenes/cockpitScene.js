@@ -1,15 +1,19 @@
 import * as THREE from 'three';
 import { createMoonTextures } from '../world/moonTexture.js';
 import { createOrbitEarth } from '../world/orbitEarth.js';
-import { computeOrbitCheck, computeArrivalCheck } from '../world/orbitChecks.js';
+import { computeOrbitCheck, computeArrivalCheck, computeLunarOrbitCheck, computeLandingSkyCheck } from '../world/orbitChecks.js';
+import { ORBIT_VIEW, ARRIVAL_VIEW, LUNAR_ORBIT_VIEW, LANDING_SKY_VIEW } from '../game/outsideViews.js';
 import { buildShell, buildWindow, buildSeats, buildLighting } from './cockpitCabin.js';
 import { buildDashboard, checkCockpitVisibility, surfaceY } from './cockpitDashboard.js';
 import { createScreens } from '../cockpit/screens.js';
 import { createInteraction } from '../cockpit/interaction.js';
-import { getLoadout } from '../game/state.js';
+import { getLoadout, getMission, setMission } from '../game/state.js';
 import { getItem } from '../data/gear.js';
 import { createLaunchEffects } from '../cockpit/launchEffects.js';
 import { createLaunchController } from '../cockpit/launchController.js';
+import { createFlightEffects } from '../cockpit/flightEffects.js';
+import { createFlightController } from '../cockpit/flightController.js';
+import { createLandingController } from '../cockpit/landingController.js';
 import { createFloaters } from '../cockpit/floaters.js';
 
 export { surfaceY };
@@ -120,7 +124,7 @@ export function createCockpitScene(containerElement) {
   const baseEarthDist = 2590;
   const baseEarthPitchDeg = Math.asin(2400 / 2590) * (180 / Math.PI) - 1.5;
 
-  const DEFAULT_VIEW = { earthScale: 1, earthOffsetY: 0, earthYawDeg: 0, earthPitchDeg: 0, moonDistance: 3600, moonScale: 1, moonYawDeg: 0, moonPitchDeg: 0 };
+  const DEFAULT_VIEW = { ...ORBIT_VIEW };
   const outsideView = { ...DEFAULT_VIEW };
 
   function applyOutsideView() {
@@ -139,6 +143,12 @@ export function createCockpitScene(containerElement) {
 
     glowSprite.position.copy(moonMesh.position);
     glowSprite.scale.set(baseGlowSize * outsideView.moonScale, baseGlowSize * outsideView.moonScale, 1);
+    if (glowSprite.material) {
+      const glowDistFactor = Math.max(0, Math.min(1, (outsideView.moonDistance - 400) / 3200));
+      const scaleFade = outsideView.moonScale > 2.0 ? 0 : 1;
+      glowSprite.material.opacity = 0.25 * glowDistFactor * scaleFade;
+      glowSprite.visible = glowSprite.material.opacity > 0.005;
+    }
   }
   applyOutsideView();
 
@@ -188,16 +198,33 @@ export function createCockpitScene(containerElement) {
 
   let lastFrameObj = null;
   let launchEffectsInstance = null, launchControllerInstance = null;
+  let flightEffectsInstance = null, flightControllerInstance = null;
+  let landingControllerInstance = null;
   try {
     const root = containerElement || document.body;
     launchEffectsInstance = createLaunchEffects({ scene, camera, renderer, outside: { stars, moon: moonMesh, glowSprite, orbitEarth: orbitEarthInst }, uiRoot: root });
     const origSetFrame = launchEffectsInstance.setFrame;
-    launchEffectsInstance.setFrame = function(frame, delta) {
-      lastFrameObj = frame;
-      origSetFrame(frame, delta);
-    };
+    launchEffectsInstance.setFrame = (frame, delta) => { lastFrameObj = frame; origSetFrame(frame, delta); };
     launchControllerInstance = createLaunchController({ screens: screensInstance, effects: launchEffectsInstance, getLoadout, launchButtonMesh, uiRoot: root });
-  } catch (error) { console.error('EarthScene part failed: launch', error); }
+
+    flightEffectsInstance = createFlightEffects({ scene, camera, cabinLights: [], outsideRig, uiRoot: root });
+    flightControllerInstance = createFlightController({ screens: screensInstance, effects: flightEffectsInstance, getLoadout, setOutsideView, uiRoot: root, floaters: floatersInstance });
+    launchControllerInstance.onContinue(() => {
+      const card = document.getElementById('orbit-reached-card');
+      if (card) { card.style.opacity = '0'; card.style.display = 'none'; }
+      if (flightControllerInstance) flightControllerInstance.start();
+    });
+
+    try {
+      landingControllerInstance = createLandingController({
+        scene, camera, cockpitScene: { setOutsideView }, screens: screensInstance,
+        getLoadout, setOutsideView, uiRoot: root, floaters: floatersInstance,
+      });
+      flightControllerInstance.onLandPressed(() => {
+        if (landingControllerInstance) landingControllerInstance.start();
+      });
+    } catch (e) { console.error('EarthScene part failed: landing', e); }
+  } catch (error) { console.error('EarthScene part failed: launch or flight', error); }
 
   let customLaunchCallback = null;
   let interactionInstance = null;
@@ -278,18 +305,21 @@ export function createCockpitScene(containerElement) {
       const sx = Math.sin(swayTime) * 0.004 * drift.idleSwayWeight;
       const sy = Math.cos(swayTime * 0.7) * 0.003 * drift.idleSwayWeight;
       camera.position.set(baseCamPos.x + sx + drift.posX, baseCamPos.y + sy + drift.posY, baseCamPos.z);
-      camera.rotation.z = drift.roll;
+      const landingRoll = landingControllerInstance ? landingControllerInstance.getRollOffset() : 0;
+      camera.rotation.z = drift.roll + landingRoll;
     } else {
       camera.position.copy(baseCamPos);
       camera.rotation.z = 0;
     }
 
-    moonMesh.rotation.y += delta * (prefersReduced ? 0.0005 : 0.002);
+    moonMesh.rotation.y += delta * (prefersReduced ? 0.0005 : (outsideView.moonScale > 5 ? 0.015 : 0.002));
     orbitEarthInst.update(delta, prefersReduced);
 
     for (let i = 0; i < updateFns.length; i++) { try { updateFns[i](delta); } catch { /* ignore */ } }
     if (screensInstance) screensInstance.update(delta);
     if (launchControllerInstance) launchControllerInstance.update(delta);
+    if (flightControllerInstance) flightControllerInstance.update(delta);
+    if (landingControllerInstance) landingControllerInstance.update(delta);
     renderer.render(scene, camera);
   }
 
@@ -299,6 +329,8 @@ export function createCockpitScene(containerElement) {
     clock.getDelta();
     if (screensInstance) screensInstance.reset();
     if (launchControllerInstance) launchControllerInstance.reset();
+    if (flightControllerInstance) flightControllerInstance.reset();
+    if (landingControllerInstance) landingControllerInstance.reset();
     if (floatersInstance) floatersInstance.reset();
     setOutsideView(DEFAULT_VIEW);
 
@@ -333,21 +365,40 @@ export function createCockpitScene(containerElement) {
     isRunningState = false;
     if (animId) { cancelAnimationFrame(animId); animId = null; }
     if (launchControllerInstance) launchControllerInstance.abort();
+    if (flightControllerInstance) flightControllerInstance.abort();
+    if (landingControllerInstance) landingControllerInstance.abort();
   }
 
-  // TEMPORARY debug helpers
   if (typeof window !== 'undefined') {
-    window.__arrivalPreview = function() {
-      setOutsideView({ earthScale: 0.11, earthOffsetY: 0, earthYawDeg: -14, earthPitchDeg: 71, moonDistance: 445, moonScale: 1, moonYawDeg: 15, moonPitchDeg: -6 });
+    window.__arrivalPreview = () => {
+      setOutsideView(ARRIVAL_VIEW);
       return computeArrivalCheck({ camera, viewParams: outsideView, screenBoxes: [] });
     };
-    window.__orbitPreview = function() {
+    window.__lunarPreview = () => {
+      setOutsideView(LUNAR_ORBIT_VIEW);
+      return computeLunarOrbitCheck({ camera, viewParams: outsideView, screenBoxes: [] });
+    };
+    window.__orbitPreview = () => {
       setOutsideView(DEFAULT_VIEW);
-      console.log('Orbit view restored');
       return computeOrbitCheck({ camera, moonDist: 3600, moonRad: baseMoonRad, sunDir });
     };
-    window.__orbitCheck = function() {
-      return computeOrbitCheck({ camera, moonDist: 3600, moonRad: baseMoonRad, sunDir });
+    window.__orbitCheck = () => computeOrbitCheck({ camera, moonDist: 3600, moonRad: baseMoonRad, sunDir });
+    window.__devFlight = () => { if (flightControllerInstance) flightControllerInstance.start(); };
+    window.__devFlightSkip = (sec) => { if (flightControllerInstance) flightControllerInstance.skipTo(sec); };
+    window.__devLanding = (siteId) => {
+      const mission = getMission();
+      setMission({ landingSite: siteId || mission.landingSite || 'ridge', fuelMargin: mission.fuelMargin ?? 20 });
+      setOutsideView(LUNAR_ORBIT_VIEW);
+      ['orbit-reached-card', 'storm-decision-dialog', 'storm-result-dialog', 'site-choice-dialog'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) { el.style.opacity = '0'; el.style.display = 'none'; }
+      });
+      if (landingControllerInstance) landingControllerInstance.start();
+    };
+    window.__devLandingSkip = (sec) => { if (landingControllerInstance) landingControllerInstance.skipTo(sec); };
+    window.__landingSkyPreview = () => {
+      setOutsideView(LANDING_SKY_VIEW);
+      return computeLandingSkyCheck({ camera, viewParams: outsideView, screenBoxes: [], glowSprite });
     };
   }
 
@@ -365,7 +416,16 @@ export function createCockpitScene(containerElement) {
     screensOk: Boolean(screensInstance),
     interactionOk: Boolean(interactionInstance),
     launchOk: Boolean(launchControllerInstance),
-    resetLaunch: () => { if (launchControllerInstance) launchControllerInstance.reset(); if (floatersInstance) floatersInstance.reset(); setOutsideView(DEFAULT_VIEW); },
+    flightOk: Boolean(flightControllerInstance),
+    landingOk: Boolean(landingControllerInstance),
+    getFlightController: () => flightControllerInstance,
+    getLandingController: () => landingControllerInstance,
+    startFlight: () => { if (flightControllerInstance) flightControllerInstance.start(); },
+    startLanding: () => { if (landingControllerInstance) landingControllerInstance.start(); },
+    resetLaunch: () => {
+      [launchControllerInstance, flightControllerInstance, landingControllerInstance, floatersInstance].forEach((inst) => { if (inst) inst.reset(); });
+      setOutsideView(DEFAULT_VIEW);
+    },
     getLaunchController: () => launchControllerInstance,
     onLaunchComplete: (cb) => { if (launchControllerInstance) launchControllerInstance.onLaunchComplete(cb); },
     onContinue: (cb) => { if (launchControllerInstance) launchControllerInstance.onContinue(cb); },
@@ -373,9 +433,7 @@ export function createCockpitScene(containerElement) {
     dispose: () => {
       stop();
       window.removeEventListener('resize', resize);
-      if (launchControllerInstance) launchControllerInstance.dispose();
-      if (launchEffectsInstance) launchEffectsInstance.dispose();
-      if (floatersInstance) floatersInstance.dispose();
+      [launchControllerInstance, flightControllerInstance, landingControllerInstance, launchEffectsInstance, flightEffectsInstance, floatersInstance].forEach((inst) => { if (inst) inst.dispose(); });
       orbitEarthInst.dispose();
     },
   };

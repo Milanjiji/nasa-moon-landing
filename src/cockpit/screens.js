@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { summarizeLoadout, levelColor } from '../game/loadoutSummary.js';
 import { getItem } from '../data/gear.js';
 import { formatTMinus, formatMissionTime } from '../game/launchSequence.js';
+import { drawFlightTopScreen, drawFlightMainScreen, drawFlightLeftScreen, drawFlightRightScreen, drawFlightCoScreen } from './flightScreens.js';
+import { drawLandingTopScreen, drawLandingMainScreen, drawLandingLeftScreen, drawLandingRightScreen, drawLandingCoScreen } from './landingScreens.js';
 
 const FONT = "'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 const TICKER_MSGS = [
@@ -10,11 +12,8 @@ const TICKER_MSGS = [
 ];
 
 const screenMetrics = {
-  main: { bottomY: 0, height: 436 },
-  left: { bottomY: 0, height: 531 },
-  right: { bottomY: 0, height: 531 },
-  top: { bottomY: 0, height: 152 },
-  co: { bottomY: 0, height: 469 },
+  main: { bottomY: 0, height: 436 }, left: { bottomY: 0, height: 531 },
+  right: { bottomY: 0, height: 531 }, top: { bottomY: 0, height: 152 }, co: { bottomY: 0, height: 469 },
 };
 
 function initBorder(ctx, cw, ch) {
@@ -23,10 +22,11 @@ function initBorder(ctx, cw, ch) {
 }
 
 function drawMain(ctx, cw, ch, state, time, prefersReduced) {
+  if (state.landingData) { drawLandingMainScreen(ctx, cw, ch, state.landingData, state.landingFeed); screenMetrics.main = { bottomY: Math.round(ch * 0.9), height: ch }; return; }
+  if (state.flightData) { drawFlightMainScreen(ctx, cw, ch, state.flightData.frame, state.flightData.mission, state.flightData.isStorm, state.flightData.stormFrame); screenMetrics.main = { bottomY: Math.round(ch * 0.9), height: ch }; return; }
   initBorder(ctx, cw, ch);
   const mx = Math.round(cw * 0.06);
-  const topMargin = Math.round(ch * 0.05), bottomMargin = Math.round(ch * 0.95);
-  const usableH = bottomMargin - topMargin;
+  const topMargin = Math.round(ch * 0.05), bottomMargin = Math.round(ch * 0.95), usableH = bottomMargin - topMargin;
   let curY = topMargin, lastY = curY;
 
   if (state.launchFrame) {
@@ -37,8 +37,7 @@ function drawMain(ctx, cw, ch, state, time, prefersReduced) {
 
     ctx.font = `600 ${fontSz}px ${FONT}`; ctx.fillStyle = '#9fd8ff'; ctx.textBaseline = 'top';
     ctx.fillText(f.orbit ? 'Orbit reached' : 'Launch status', mx, curY); curY += step;
-    ctx.font = `700 ${fontSz + 2}px ${FONT}`; ctx.fillStyle = '#e8f3ff';
-    ctx.fillText(f.stageLabel, mx, curY); curY += step;
+    ctx.font = `700 ${fontSz + 2}px ${FONT}`; ctx.fillStyle = '#e8f3ff'; ctx.fillText(f.stageLabel, mx, curY); curY += step;
     ctx.font = `500 ${fontSz}px ${FONT}`;
     ctx.fillText(`Altitude ${Math.round(f.altitudeKm).toLocaleString()} km`, mx, curY); curY += step;
     ctx.fillText(`Speed ${Math.round(f.speedKmh).toLocaleString()} km/h`, mx, curY); curY += step;
@@ -81,11 +80,9 @@ function drawMain(ctx, cw, ch, state, time, prefersReduced) {
   const cats = [['suit', 'Suit'], ['helmet', 'Helmet'], ['gloves', 'Gloves'], ['boots', 'Boots'], ['backpack', 'Life support pack']];
   ctx.font = `500 ${fontSz}px ${FONT}`;
   for (let i = 0; i < cats.length; i++) {
-    const itemId = state.loadout.selection[cats[i][0]];
-    const item = itemId ? getItem(cats[i][0], itemId) : null;
+    const itemId = state.loadout.selection[cats[i][0]], item = itemId ? getItem(cats[i][0], itemId) : null;
     ctx.fillStyle = '#9fd8ff'; ctx.textAlign = 'left'; ctx.fillText(cats[i][1], mx, curY);
-    ctx.fillStyle = item ? '#e8f3ff' : '#9fd8ff'; ctx.textAlign = 'right';
-    ctx.fillText(item ? item.name : 'Not chosen', cw - mx, curY);
+    ctx.fillStyle = item ? '#e8f3ff' : '#9fd8ff'; ctx.textAlign = 'right'; ctx.fillText(item ? item.name : 'Not chosen', cw - mx, curY);
     curY += step;
   }
   ctx.textAlign = 'left';
@@ -138,6 +135,8 @@ function drawMain(ctx, cw, ch, state, time, prefersReduced) {
 }
 
 function drawLeft(ctx, cw, ch, state, time, prefersReduced) {
+  if (state.landingData) { drawLandingLeftScreen(ctx, cw, ch, state.landingData); screenMetrics.left = { bottomY: Math.round(ch * 0.9), height: ch }; return; }
+  if (state.flightData) { drawFlightLeftScreen(ctx, cw, ch, state.flightData.frame, state.flightData.mission, state.flightData.isStorm, state.flightData.stormFrame, state.summary); screenMetrics.left = { bottomY: Math.round(ch * 0.9), height: ch }; return; }
   initBorder(ctx, cw, ch);
   ctx.font = `600 28px ${FONT}`; ctx.fillStyle = '#9fd8ff'; ctx.textBaseline = 'top'; ctx.textAlign = 'center';
   ctx.fillText('Life support', cw * 0.5, Math.round(ch * 0.08));
@@ -204,6 +203,8 @@ function drawLeft(ctx, cw, ch, state, time, prefersReduced) {
 }
 
 function drawRight(ctx, cw, ch, state, time, prefersReduced) {
+  if (state.landingData) { drawLandingRightScreen(ctx, cw, ch, state.landingData); screenMetrics.right = { bottomY: Math.round(ch * 0.9), height: ch }; return; }
+  if (state.flightData) { drawFlightRightScreen(ctx, cw, ch, state.flightData.frame, state.flightData.mission, state.flightData.isStorm, state.flightData.isLunarOrbit, state.flightData.selectedSite); screenMetrics.right = { bottomY: Math.round(ch * 0.9), height: ch }; return; }
   initBorder(ctx, cw, ch);
   const mx = Math.round(cw * 0.06);
   ctx.font = `600 28px ${FONT}`; ctx.fillStyle = '#9fd8ff'; ctx.textBaseline = 'top';
@@ -253,6 +254,12 @@ function drawRight(ctx, cw, ch, state, time, prefersReduced) {
 }
 
 function drawTop(ctx, cw, ch, state, time, prefersReduced) {
+  if (state.landingData) { drawLandingTopScreen(ctx, cw, ch, state.landingData); screenMetrics.top = { bottomY: Math.round(ch * 0.8), height: ch }; return; }
+  if (state.flightData) {
+    drawFlightTopScreen(ctx, cw, ch, state.flightData.frame, state.flightData.mission);
+    screenMetrics.top = { bottomY: Math.round(ch * 0.8), height: ch };
+    return;
+  }
   initBorder(ctx, cw, ch);
   ctx.font = `600 22px ${FONT}`; ctx.fillStyle = '#9fd8ff'; ctx.textBaseline = 'top';
   ctx.fillText('Mission clock', Math.round(cw * 0.05), 14);
@@ -290,6 +297,12 @@ function drawTop(ctx, cw, ch, state, time, prefersReduced) {
 }
 
 function drawCo(ctx, cw, ch, state, time, prefersReduced) {
+  if (state.landingData) { drawLandingCoScreen(ctx, cw, ch, { ...state.landingData, extraLogs: state.extraLogs, time }); screenMetrics.co = { bottomY: Math.round(ch * 0.9), height: ch }; return; }
+  if (state.flightData) {
+    drawFlightCoScreen(ctx, cw, ch, state.flightData.frame, state.flightData.mission, state.extraLogs);
+    screenMetrics.co = { bottomY: Math.round(ch * 0.9), height: ch };
+    return;
+  }
   initBorder(ctx, cw, ch);
   const mx = Math.round(cw * 0.06), my = Math.round(ch * 0.08);
   ctx.font = `600 28px ${FONT}`; ctx.fillStyle = '#9fd8ff'; ctx.textBaseline = 'top';
@@ -339,17 +352,10 @@ function drawCo(ctx, cw, ch, state, time, prefersReduced) {
 if (typeof window !== 'undefined') {
   window.__screenFitCheck = function() {
     const keys = ['main', 'left', 'right', 'top', 'co'];
-    const rows = keys.map((k) => {
-      const m = screenMetrics[k];
-      const maxLimit = Math.round(m.height * 0.95);
-      return {
-        screen: k,
-        lastTextBottomY: m.bottomY,
-        canvasHeight: m.height,
-        marginLimit: maxLimit,
-        fits: m.bottomY <= maxLimit,
-      };
-    });
+    const rows = keys.map((k) => ({
+      screen: k, lastTextBottomY: screenMetrics[k].bottomY, canvasHeight: screenMetrics[k].height,
+      marginLimit: Math.round(screenMetrics[k].height * 0.95), fits: screenMetrics[k].bottomY <= Math.round(screenMetrics[k].height * 0.95),
+    }));
     console.table(rows);
     return rows;
   };
@@ -362,6 +368,7 @@ export function createScreens({ anchors, getLoadout, renderer }) {
   const state = {
     loadout: null, summary: summarizeLoadout(null),
     extraLogs: [], launchFrame: null, launchMission: null,
+    flightData: null, landingData: null, landingFeed: null,
   };
 
   const prefersReduced = (
@@ -416,6 +423,9 @@ export function createScreens({ anchors, getLoadout, renderer }) {
   function reset() {
     timeSec = 0; lastRedraw8Fps = -1; lastRedraw4Fps = -1; lastLoadoutFetch = -1;
     state.extraLogs = []; state.launchFrame = null; state.launchMission = null;
+    state.flightData = null;
+    state.landingData = null;
+    state.landingFeed = null;
     fetchLoadout();
     update(0, true);
   }
@@ -428,6 +438,11 @@ export function createScreens({ anchors, getLoadout, renderer }) {
     setLogLine: (t) => { if (t) { state.extraLogs.push(t); if (state.extraLogs.length > 30) state.extraLogs.shift(); } },
     setLaunchFrame: (frame, mission) => { state.launchFrame = frame; state.launchMission = mission; },
     clearLaunchMode: () => { state.launchFrame = null; state.launchMission = null; },
+    setFlightFrame: (flightData) => { state.flightData = flightData; },
+    clearFlightMode: () => { state.flightData = null; },
+    setLandingFrame: (landingData) => { state.landingData = landingData; },
+    clearLandingMode: () => { state.landingData = null; },
+    setLandingFeed: (feed) => { state.landingFeed = feed; },
   };
 }
 

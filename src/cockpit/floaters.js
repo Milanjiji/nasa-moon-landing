@@ -180,9 +180,33 @@ export function createFloaters({ scene, camera, surfaceY }) {
   let driftTime = 0;
   let driftWeight = 0;
   let wobbleTime = 0;
+  let settling = false;
+  let settleDuration = 4.0;
+  let settleElapsed = 0;
+  const settleStarts = [];
+
+  function settle(duration = 4.0) {
+    settling = true;
+    settleDuration = Math.max(0.5, duration);
+    settleElapsed = 0;
+    settleStarts.length = 0;
+    for (let i = 0; i < itemsState.length; i++) {
+      const it = itemsState[i];
+      if (it.mesh) {
+        settleStarts.push({
+          pos: it.mesh.position.clone(),
+          rot: it.mesh.rotation.clone(),
+        });
+      } else {
+        settleStarts.push(null);
+      }
+    }
+  }
 
   function resetPositions() {
     isWeightless = false;
+    settling = false;
+    settleElapsed = 0;
     liftTime = 0;
     fadeAlpha = 0;
     driftTime = 0;
@@ -210,6 +234,42 @@ export function createFloaters({ scene, camera, surfaceY }) {
   }
 
   function update(delta, frame, prefersReduced) {
+    if (settling) {
+      settleElapsed += delta;
+      const p = Math.min(1.0, settleElapsed / settleDuration);
+      const ease = p * p * (3 - 2 * p);
+      driftWeight = Math.max(0, 1.0 - (settleElapsed / 2.0));
+
+      for (let i = 0; i < itemsState.length; i++) {
+        const it = itemsState[i];
+        const start = settleStarts[i];
+        if (!it.mesh || !start) continue;
+
+        if (it.rest) {
+          it.mesh.position.lerpVectors(start.pos, it.rest.pos, ease);
+          it.mesh.rotation.x = start.rot.x + (it.rest.rot.x - start.rot.x) * ease;
+          it.mesh.rotation.y = start.rot.y + (it.rest.rot.y - start.rot.y) * ease;
+          it.mesh.rotation.z = start.rot.z + (it.rest.rot.z - start.rot.z) * ease;
+        } else {
+          if (it.mesh.material) {
+            it.mesh.material.opacity = Math.max(0, (1 - p) * 0.7);
+            if (p >= 1.0) it.mesh.visible = false;
+          }
+        }
+      }
+
+      if (dustMesh && dustMat) {
+        dustMat.opacity = Math.max(0, (1 - p) * 0.5);
+        if (p >= 1.0) dustMesh.visible = false;
+      }
+
+      if (p >= 1.0) {
+        settling = false;
+        isWeightless = false;
+      }
+      return;
+    }
+
     const gVal = (frame && typeof frame.g === 'number') ? frame.g : 1.0;
     const stage = frame?.stage;
     const nowWeightless = (gVal === 0) || stage === 'coast' || stage === 'orbit';
@@ -345,6 +405,7 @@ export function createFloaters({ scene, camera, surfaceY }) {
     group,
     update,
     reset: resetPositions,
+    settle,
     getDriftOffset,
     dispose,
   };
