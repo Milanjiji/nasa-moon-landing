@@ -11,6 +11,7 @@ export const PHASES = [
   'storm',
   'lunarOrbit',
   'landing',
+  'surface',
   'base',
   'ending',
 ];
@@ -33,6 +34,12 @@ const state = {
     landingLevel: null,
     damage: 'none',
     landed: false,
+    surface: {
+      steppedOut: false,
+      sawEarth: false,
+      photoTaken: false,
+      stats: null,
+    },
   },
 };
 
@@ -115,6 +122,12 @@ export function resetMission() {
     landingLevel: null,
     damage: 'none',
     landed: false,
+    surface: {
+      steppedOut: false,
+      sawEarth: false,
+      photoTaken: false,
+      stats: null,
+    },
   };
 }
 

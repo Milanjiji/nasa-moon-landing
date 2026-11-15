@@ -15,6 +15,7 @@ import { createFlightEffects } from '../cockpit/flightEffects.js';
 import { createFlightController } from '../cockpit/flightController.js';
 import { createLandingController } from '../cockpit/landingController.js';
 import { createFloaters } from '../cockpit/floaters.js';
+import { playStepOut } from '../cockpit/stepOut.js';
 
 export { surfaceY };
 
@@ -219,6 +220,9 @@ export function createCockpitScene(containerElement) {
       landingControllerInstance = createLandingController({
         scene, camera, cockpitScene: { setOutsideView }, screens: screensInstance,
         getLoadout, setOutsideView, uiRoot: root, floaters: floatersInstance,
+      });
+      landingControllerInstance.onLandedContinue(() => {
+        playStepOut();
       });
       flightControllerInstance.onLandPressed(() => {
         if (landingControllerInstance) landingControllerInstance.start();
@@ -429,6 +433,7 @@ export function createCockpitScene(containerElement) {
     getLaunchController: () => launchControllerInstance,
     onLaunchComplete: (cb) => { if (launchControllerInstance) launchControllerInstance.onLaunchComplete(cb); },
     onContinue: (cb) => { if (launchControllerInstance) launchControllerInstance.onContinue(cb); },
+    onLandedContinue: (cb) => { if (landingControllerInstance) landingControllerInstance.onLandedContinue(cb); },
     onLaunchPressed: (cb) => { customLaunchCallback = cb; },
     dispose: () => {
       stop();

@@ -4,6 +4,12 @@ import createCharacterPopup from '../ui/characterPopup.js';
 import { getPhase, setPhase } from '../game/state.js';
 import { createMoonTextures } from '../world/moonTexture.js';
 import createCockpitScene from './cockpitScene.js';
+import createSurfaceScene from './surfaceScene.js';
+import createSurfaceHud from '../ui/surfaceHud.js';
+import { computeSurfaceCheck } from '../world/surfaceChecks.js';
+import { getMission, setMission, getLoadout } from '../game/state.js';
+import { getSite, SITES } from '../data/sites.js';
+import { getSurfaceStart } from '../game/surfaceStats.js';
 
 const STAR_COUNT = 3500;
 const MOON_ROTATION_SPEED = 0.025;
@@ -143,6 +149,7 @@ export default class EarthScene {
       launch: false,
       flight: false,
       landing: false,
+      surface: false,
     };
 
     // ---- Renderer and camera (essential) ----
@@ -369,6 +376,26 @@ export default class EarthScene {
       console.error('EarthScene part failed: cockpit', error);
     }
 
+    // ---- Surface scene & HUD ----
+    try {
+      const surfaceContainer = document.getElementById('surface-view');
+      if (surfaceContainer) {
+        this.surfaceScene = createSurfaceScene(surfaceContainer);
+        this.surfaceHud = createSurfaceHud({ uiRoot: document.body });
+        if (typeof window !== 'undefined') {
+          window.surfaceScene = this.surfaceScene;
+          window.surfaceHud = this.surfaceHud;
+        }
+        if (this.surfaceScene && this.surfaceHud) {
+          this.setupStatus.surface = true;
+          this.surfaceHud.onPhoto(() => this.surfaceScene.takePhoto());
+          this.surfaceHud.setWalkHandler((dir) => this.surfaceScene.setWalk(dir));
+        }
+      }
+    } catch (error) {
+      console.error('EarthScene part failed: surface', error);
+    }
+
     // Dev button in cockpit: return to launch site
     try {
       const devBackBtn = document.getElementById('cockpit-dev-back-btn');
@@ -376,6 +403,32 @@ export default class EarthScene {
         devBackBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           /* TEMPORARY: dev button to return to launch site */
+          if (this.surfaceScene) {
+            this.surfaceScene.stop();
+          }
+          if (this.surfaceHud) {
+            this.surfaceHud.hide();
+          }
+          if (typeof window !== 'undefined') {
+            if (window.surfaceScene?.stop) window.surfaceScene.stop();
+            if (window.surfaceHud?.hide) window.surfaceHud.hide();
+          }
+          const surfaceView = document.getElementById('surface-view');
+          if (surfaceView) {
+            surfaceView.classList.add('hidden');
+            surfaceView.style.display = 'none';
+          }
+          const curMission = getMission();
+          if (curMission && curMission.surface) {
+            curMission.surface = {
+              steppedOut: false,
+              sawEarth: false,
+              photoTaken: false,
+              stats: null,
+            };
+            setMission(curMission);
+          }
+
           if (this.cockpitScene) {
             this.cockpitScene.stop();
             if (typeof this.cockpitScene.resetLaunch === 'function') {
@@ -405,6 +458,75 @@ export default class EarthScene {
       console.error('EarthScene part failed: cockpitDevBtn', error);
     }
 
+    /* TEMPORARY: dev jump to surface scene & surface check */
+    if (typeof window !== 'undefined') {
+      window.__devSurface = function(siteId, skipLadder = true) {
+        const site = getSite(siteId || 'ridge') || SITES[0];
+        const mission = getMission();
+        mission.landingSite = site.id;
+        mission.fuelMargin = mission.fuelMargin ?? 20;
+        mission.healthPenalty = 0;
+        mission.damage = 'none';
+        mission.surface = {
+          steppedOut: true,
+          sawEarth: false,
+          photoTaken: false,
+          stats: null,
+        };
+        setMission(mission);
+
+        const loadout = typeof getLoadout === 'function' ? getLoadout() : null;
+        const stats = getSurfaceStart(mission, loadout, site);
+        mission.surface.stats = stats;
+        setMission(mission);
+
+        const panelIds = [
+          'orbit-reached-card',
+          'storm-decision-dialog',
+          'storm-result-dialog',
+          'site-choice-dialog',
+          'landing-decision-dialog',
+          'landing-touchdown-dialog',
+          'landing-dust-canvas',
+          'landing-glow-overlay',
+        ];
+        panelIds.forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) { el.style.opacity = '0'; el.style.display = 'none'; }
+        });
+
+        const cockpitCanvas = document.querySelector('.cockpit-canvas');
+        if (cockpitCanvas) cockpitCanvas.style.display = 'none';
+        if (window.cockpitScene?.stop) window.cockpitScene.stop();
+
+        const surfaceContainer = document.getElementById('surface-view');
+        if (surfaceContainer) {
+          surfaceContainer.classList.remove('hidden');
+          surfaceContainer.style.display = 'block';
+        }
+
+        setPhase('surface');
+        if (window.surfaceScene) {
+          window.surfaceScene.start({ site, stats, skipLadder });
+        }
+        if (window.surfaceHud) {
+          window.surfaceHud.show(stats, site);
+        }
+      };
+
+      window.__surfaceCheck = function(siteId) {
+        if (window.surfaceScene) {
+          return computeSurfaceCheck({
+            scene: window.surfaceScene.getScene(),
+            camera: window.surfaceScene.getCamera(),
+            renderer: window.surfaceScene.getRenderer(),
+            siteId: siteId || getMission().landingSite || 'ridge',
+          });
+        }
+        return computeSurfaceCheck({ siteId: siteId || 'ridge' });
+      };
+    }
+
     // ---- Status summary ----
     try {
       const skyStatus = this.setupStatus.sky ? 'ok' : 'FAILED';
@@ -432,9 +554,10 @@ export default class EarthScene {
       const launchStatus = this.setupStatus.launch ? 'ok' : 'FAILED';
       const flightStatus = this.setupStatus.flight ? 'ok' : 'FAILED';
       const landingStatus = this.setupStatus.landing ? 'ok' : 'FAILED';
+      const surfaceStatus = this.setupStatus.surface ? 'ok' : 'FAILED';
       const currentPhase = getPhase();
 
-      const statusMessage = `EarthScene ready: sky=${skyStatus} moon=${moonStatus} stars=${starsStatus} ground=${groundStatus} ridges=${ridgesStatus} launchSite=${launchSiteStatus} trees=${treesStatus} (${treeCount} trees) drag=${dragStatus} padCenter=${padCenterStatus} prepare=${prepareStatus} popup=${popupStatus} gear=${gearStatus} board=${boardStatus} cockpit=${cockpitStatus} dashboard=${dashboardStatus} screens=${screensStatus} interaction=${interactionStatus} launch=${launchStatus} flight=${flightStatus} landing=${landingStatus} phase=${currentPhase}`;
+      const statusMessage = `EarthScene ready: sky=${skyStatus} moon=${moonStatus} stars=${starsStatus} ground=${groundStatus} ridges=${ridgesStatus} launchSite=${launchSiteStatus} trees=${treesStatus} (${treeCount} trees) drag=${dragStatus} padCenter=${padCenterStatus} prepare=${prepareStatus} popup=${popupStatus} gear=${gearStatus} board=${boardStatus} cockpit=${cockpitStatus} dashboard=${dashboardStatus} screens=${screensStatus} interaction=${interactionStatus} launch=${launchStatus} flight=${flightStatus} landing=${landingStatus} surface=${surfaceStatus} phase=${currentPhase}`;
       console.log(statusMessage);
     } catch (error) {
       console.error('EarthScene part failed: status', error);
